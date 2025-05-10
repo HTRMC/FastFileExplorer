@@ -14,8 +14,8 @@ if(WIN32)
     # Define UNICODE and related macros for proper Windows API usage
     add_definitions(-DWIN32_LEAN_AND_MEAN -DNOMINMAX -DUNICODE -D_UNICODE)
 
-    # Tell CMake this is a Windows GUI application
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
+    # Tell CMake this is a Windows GUI application (important for wWinMain)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS")
 endif()
 
 # Find required packages
