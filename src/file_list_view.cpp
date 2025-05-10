@@ -148,7 +148,7 @@ void FileListView::loadFiles(const std::vector<FileExplorer::FileItem>& files) {
         // Format date
         auto timePoint = file.last_write_time;
         auto time = std::chrono::system_clock::to_time_t(timePoint);
-        std::tm tm;
+        std::tm tm = {};
         localtime_s(&tm, &time);
         
         // Format date as "YYYY-MM-DD HH:MM:SS"
@@ -167,24 +167,29 @@ void FileListView::loadFiles(const std::vector<FileExplorer::FileItem>& files) {
         lvItem.iImage = iconIndex;
         lvItem.lParam = static_cast<LPARAM>(i);  // Store index for lookup
         
-        // Convert name to wide string
-        std::wstring nameW(file.name.begin(), file.name.end());
-        lvItem.pszText = const_cast<LPWSTR>(nameW.c_str());
+        // Convert name to wide string - FIXED: ensure non-empty string
+        if (!file.name.empty()) {
+            std::wstring nameW = std::wstring(file.name.begin(), file.name.end());
+            lvItem.pszText = const_cast<LPWSTR>(nameW.c_str());
+        } else {
+            // Handle empty string case
+            lvItem.pszText = const_cast<LPWSTR>(L"");
+        }
         
         int itemIndex = ListView_InsertItem(m_hwnd, &lvItem);
         
-        // Set subitems
+        // Set subitems - FIXED: Ensure non-empty strings
         
         // Size
-        std::wstring sizeW(sizeStr.begin(), sizeStr.end());
+        std::wstring sizeW = sizeStr.empty() ? L"" : std::wstring(sizeStr.begin(), sizeStr.end());
         ListView_SetItemText(m_hwnd, itemIndex, COLUMN_SIZE, const_cast<LPWSTR>(sizeW.c_str()));
 
         // Type
-        std::wstring typeW(typeStr.begin(), typeStr.end());
+        std::wstring typeW = typeStr.empty() ? L"" : std::wstring(typeStr.begin(), typeStr.end());
         ListView_SetItemText(m_hwnd, itemIndex, COLUMN_TYPE, const_cast<LPWSTR>(typeW.c_str()));
 
         // Date
-        std::wstring dateW(dateStr.begin(), dateStr.end());
+        std::wstring dateW = dateStr.empty() ? L"" : std::wstring(dateStr.begin(), dateStr.end());
         ListView_SetItemText(m_hwnd, itemIndex, COLUMN_DATE, const_cast<LPWSTR>(dateW.c_str()));
     }
 }
