@@ -389,18 +389,15 @@ void MainWindow::onAddressBarTextChanged() {
 
 void MainWindow::onSearchBoxTextChanged() {
     // Get search text
-    WCHAR buffer[256];
+    WCHAR buffer[256] = {0}; // Initialize to zeros
     GetWindowTextW(m_searchBox, buffer, 256);
     
-    // Convert to UTF-8 using proper conversion function
-    std::wstring wstr(buffer);
-
-    // Use a proper conversion function instead of direct constructor
+    // Convert to UTF-8
     std::string query;
-    int bufferSize = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    int bufferSize = WideCharToMultiByte(CP_UTF8, 0, buffer, -1, nullptr, 0, nullptr, nullptr);
     if (bufferSize > 0) {
         query.resize(bufferSize - 1); // -1 to remove null terminator
-        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &query[0], bufferSize, nullptr, nullptr);
+        WideCharToMultiByte(CP_UTF8, 0, buffer, -1, &query[0], bufferSize, nullptr, nullptr);
     }
     
     // Perform search
