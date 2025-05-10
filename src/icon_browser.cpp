@@ -5,8 +5,23 @@
 #include <shlobj.h>
 #include <string>
 #include <vector>
-#include <format>
+#include <sstream>
 #include <Uxtheme.h>
+
+// Define our own format function if std::format is not available (C++20 feature)
+#if defined(__cpp_lib_format) && __cpp_lib_format >= 201907L
+#include <format>
+#else
+namespace std {
+    template<typename... Args>
+    std::wstring format(const std::wstring& fmt, Args&&... args) {
+        // Simple implementation for integer formatting only
+        std::wostringstream ss;
+        ss << args...;
+        return ss.str();
+    }
+}
+#endif
 
 // Link with required libraries
 #pragma comment(lib, "comctl32.lib")
@@ -38,6 +53,9 @@ struct IconButtonData {
 std::vector<IconButtonData> g_buttons;
 HWND g_hwndMain = NULL;
 HWND g_hwndStatusBar = NULL;
+int g_scrollY = 0;             // Current vertical scroll position
+int g_totalHeight = 0;         // Total scrollable height
+int g_clientHeight = 0;        // Current client area height
 
 // Forward declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -107,7 +125,7 @@ void CreateIconButtons(HWND hwnd) {
         int row = i / buttonsPerRow;
         int col = i % buttonsPerRow;
         int x = PADDING + (col * BUTTON_SIZE);
-        int y = PADDING + (row * BUTTON_SIZE);
+        int y = PADDING + (row * BUTTON_SIZE) - g_scrollY; // Adjust for scrolling
         
         // Create the button
         HWND hwndButton = CreateWindow(
@@ -119,6 +137,13 @@ void CreateIconButtons(HWND hwnd) {
         );
         
         if (hwndButton) {
+            // Only show buttons that are visible in the current scroll area
+            if (y + BUTTON_SIZE < 0 || y > rect.bottom) {
+                ShowWindow(hwndButton, SW_HIDE);
+            } else {
+                ShowWindow(hwndButton, SW_SHOW);
+            }
+            
             // Subclass the button
             SetWindowLongPtr(hwndButton, GWLP_USERDATA, i); // Store icon ID
             g_originalButtonProc = (WNDPROC)SetWindowLongPtr(hwndButton, GWLP_WNDPROC, (LONG_PTR)ButtonProc);
@@ -140,7 +165,18 @@ void CreateIconButtons(HWND hwnd) {
     
     // Calculate required window height
     int rowCount = (MAX_STOCK_ICON_ID + buttonsPerRow) / buttonsPerRow;
-    int requiredHeight = (rowCount * BUTTON_SIZE) + (2 * PADDING);
+    g_totalHeight = (rowCount * BUTTON_SIZE) + (2 * PADDING);
+    g_clientHeight = rect.bottom - rect.top;
+    
+    // Set up scrollbar
+    SCROLLINFO si = {0};
+    si.cbSize = sizeof(SCROLLINFO);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = g_totalHeight;
+    si.nPage = g_clientHeight;
+    si.nPos = g_scrollY;
+    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
     
     // Update status bar
     SetWindowText(g_hwndStatusBar, L"Click an icon to copy its ID to clipboard");
@@ -214,6 +250,90 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             
             // Resize status bar
             SendMessage(g_hwndStatusBar, WM_SIZE, 0, 0);
+            return 0;
+            
+        case WM_VSCROLL:
+            {
+                // Get current scroll info
+                SCROLLINFO si = {0};
+                si.cbSize = sizeof(SCROLLINFO);
+                si.fMask = SIF_ALL;
+                GetScrollInfo(hwnd, SB_VERT, &si);
+                
+                // Save the old position for comparison later
+                int oldPos = si.nPos;
+                
+                // Calculate new position
+                switch (LOWORD(wParam)) {
+                    case SB_TOP:
+                        si.nPos = si.nMin;
+                        break;
+                    case SB_BOTTOM:
+                        si.nPos = si.nMax;
+                        break;
+                    case SB_LINEUP:
+                        si.nPos -= BUTTON_SIZE;
+                        break;
+                    case SB_LINEDOWN:
+                        si.nPos += BUTTON_SIZE;
+                        break;
+                    case SB_PAGEUP:
+                        si.nPos -= si.nPage;
+                        break;
+                    case SB_PAGEDOWN:
+                        si.nPos += si.nPage;
+                        break;
+                    case SB_THUMBPOSITION:
+                    case SB_THUMBTRACK:
+                        si.nPos = si.nTrackPos;
+                        break;
+                }
+                
+                // Set new position and get it back to get limited value
+                si.fMask = SIF_POS;
+                SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+                GetScrollInfo(hwnd, SB_VERT, &si);
+                
+                // If the position has changed, scroll the window
+                if (si.nPos != oldPos) {
+                    g_scrollY = si.nPos;
+                    CreateIconButtons(hwnd); // Recreate buttons with new scroll position
+                }
+            }
+            return 0;
+            
+        case WM_MOUSEWHEEL:
+            {
+                int wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
+                int scrollLines = 3; // Default number of lines to scroll
+                
+                // Get system setting for number of lines to scroll
+                SystemParametersInfo(SPI_GETWHEELSCROLLLINES, 0, &scrollLines, 0);
+                
+                // Calculate how much to scroll (normalize wheel delta)
+                int scrollAmount = -(wheelDelta * scrollLines * BUTTON_SIZE) / WHEEL_DELTA;
+                
+                // Get current scroll info
+                SCROLLINFO si = {0};
+                si.cbSize = sizeof(SCROLLINFO);
+                si.fMask = SIF_ALL;
+                GetScrollInfo(hwnd, SB_VERT, &si);
+                
+                // Calculate new position
+                int newPos = si.nPos + scrollAmount;
+                newPos = std::max(0, std::min(newPos, si.nMax - (int)si.nPage + 1));
+                
+                if (newPos != si.nPos) {
+                    // Update scroll position
+                    si.fMask = SIF_POS;
+                    si.nPos = newPos;
+                    SetScrollInfo(hwnd, SB_VERT, &si, TRUE);
+                    
+                    // Update global scroll position and redraw
+                    g_scrollY = newPos;
+                    CreateIconButtons(hwnd);
+                }
+            }
             return 0;
             
         case WM_COMMAND:
