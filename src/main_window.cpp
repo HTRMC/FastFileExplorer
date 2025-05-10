@@ -629,17 +629,15 @@ void MainWindow::createSideBar() {
     SendMessage(m_sideBar, WM_SETFONT, reinterpret_cast<WPARAM>(hFont), MAKELPARAM(TRUE, 0));
     
     // Populate tree view with drives and special folders
-    HTREEITEM hRoot = TreeView_InsertItem(m_sideBar, &TVINSERTSTRUCTW{
-        .hParent = TVI_ROOT,
-        .hInsertAfter = TVI_LAST,
-        .item = {
-            .mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE,
-            .pszText = const_cast<LPWSTR>(L"This PC"),
-            .iImage = 0,
-            .iSelectedImage = 0,
-            .lParam = 0
-        }
-    });
+    TVINSERTSTRUCTW tvis_root = {};
+    tvis_root.hParent = TVI_ROOT;
+    tvis_root.hInsertAfter = TVI_LAST;
+    tvis_root.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+    tvis_root.item.pszText = const_cast<LPWSTR>(L"This PC");
+    tvis_root.item.iImage = 0;
+    tvis_root.item.iSelectedImage = 0;
+    tvis_root.item.lParam = 0;
+    HTREEITEM hRoot = TreeView_InsertItem(m_sideBar, &tvis_root);
     
     // Add drives
     for (const auto& drive : FileSystemUtils::getLogicalDrives()) {
