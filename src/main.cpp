@@ -27,7 +27,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         // Create main window
         auto mainWindow = std::make_unique<MainWindow>();
         if (!mainWindow->create()) {
-            MessageBox(NULL, L"Failed to create main window!", L"Error", MB_ICONERROR | MB_OK);
+            MessageBoxW(NULL, L"Failed to create main window!", L"Error", MB_ICONERROR | MB_OK);
             return 1;
         }
 
@@ -42,7 +42,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
     catch (...) {
-        MessageBox(NULL, L"Unknown fatal error occurred!", L"Error", MB_ICONERROR | MB_OK);
+        MessageBoxW(NULL, L"Unknown fatal error occurred!", L"Error", MB_ICONERROR | MB_OK);
         return 1;
     }
 }
