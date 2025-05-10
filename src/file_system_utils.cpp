@@ -47,6 +47,12 @@ namespace {
         MultiByteToWideChar(CP_UTF8, 0, str.data(), static_cast<int>(str.size()), &wstrTo[0], size_needed);
         return wstrTo;
     }
+
+    // Convert narrow string to wide string
+    std::wstring toWideString(const std::string& str) {
+        std::wstring result(str.begin(), str.end());
+        return result;
+    }
 }
 
 std::vector<fs::path> getLogicalDrives() {

@@ -479,24 +479,27 @@ void MainWindow::updateStatusBar() {
         std::vector<FileExplorer::FileItem> selectedItems = m_fileListView->getSelectedItems();
         int selectedCount = static_cast<int>(selectedItems.size());
         
-        std::wstring statusText;
+        std::string statusText;
         if (selectedCount == 0) {
             // Show item count
-            statusText = std::format(L"{} items", m_fileListView->getSelectedItems().size());
+            statusText = std::format("{} items", m_fileListView->getSelectedItems().size());
         }
         else if (selectedCount == 1) {
             // Show selected item info
             const auto& item = selectedItems[0];
-            statusText = std::format(L"1 item selected - {} ({})", 
-                item.path.filename().wstring(),
+            statusText = std::format("1 item selected - {} ({})",
+                item.path.filename().string(),
                 FileSystemUtils::formatFileSize(item.size));
         }
         else {
             // Show selected count
-            statusText = std::format(L"{} items selected", selectedCount);
+            statusText = std::format("{} items selected", selectedCount);
         }
-        
-        SendMessageW(m_statusBar, SB_SETTEXT, 0, reinterpret_cast<LPARAM>(statusText.c_str()));
+
+        // Convert to wide string
+        std::wstring wideStatusText(statusText.begin(), statusText.end());
+
+        SendMessageW(m_statusBar, SB_SETTEXT, 0, reinterpret_cast<LPARAM>(wideStatusText.c_str()));
     }
 }
 
