@@ -84,6 +84,7 @@ std::wstring GetFileTypeDescription(const fs::path& path);
 std::wstring FormatFileSize(uintmax_t size);
 void UpdateNavigationButtons();
 void ApplyFontToAllControls();
+void EnableWindowTheme(HWND hwnd, LPCWSTR classList, LPCWSTR subApp);
 HWND CreateCustomButton(HWND hwndParent, int x, int y, int width, int height, int id, HINSTANCE hInstance);
 
 // Create a custom button with dark gray background
@@ -563,10 +564,8 @@ LRESULT CALLBACK CustomButtonProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             // Fill the background
             FillRect(hdc, &rect, hBrush);
 
-            // Get button text and icon
-            wchar_t text[256] = {0};
-            GetWindowTextW(hwnd, text, 256);
-            HICON hIcon = (HICON)SendMessageW(hwnd, BM_GETIMAGE, IMAGE_ICON, 0);
+            // Get the icon directly from the window's user data
+            HICON hIcon = (HICON)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
             // Set up for drawing text
             SetBkMode(hdc, TRANSPARENT);
@@ -574,15 +573,23 @@ LRESULT CALLBACK CustomButtonProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             if (hIcon)
             {
-                // Draw icon centered
+                // Draw icon centered - use a different approach
                 int iconX = (rect.right - rect.left - ICON_SIZE) / 2;
                 int iconY = (rect.bottom - rect.top - ICON_SIZE) / 2;
-                DrawIconEx(hdc, iconX, iconY, hIcon, ICON_SIZE, ICON_SIZE, 0, NULL, DI_NORMAL);
+
+                // Try to force icon drawing with multiple methods
+                DrawIcon(hdc, iconX, iconY, hIcon);
             }
-            else if (text[0] != '\0')
+            else
             {
-                // Draw text centered
-                DrawTextW(hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                // No icon, draw text instead
+                TCHAR text[256];
+                GetWindowText(hwnd, text, 256);
+                if (text[0] != '\0')
+                {
+                    // Draw text as a clear fallback
+                    DrawText(hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
             }
 
             // Draw focus rectangle if button has focus
@@ -638,7 +645,7 @@ LRESULT CALLBACK CustomButtonProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             if (PtInRect(&rect, pt))
             {
                 SendMessageW(GetParent(hwnd), WM_COMMAND,
-                    MAKEWPARAM(GetDlgCtrlID(hwnd), BN_CLICKED), (LPARAM)hwnd);
+                             MAKEWPARAM(GetDlgCtrlID(hwnd), BN_CLICKED), (LPARAM)hwnd);
             }
         }
         return 0;
@@ -667,7 +674,7 @@ LRESULT CALLBACK CustomButtonProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
             isPressed = false;
             InvalidateRect(hwnd, NULL, FALSE);
             SendMessageW(GetParent(hwnd), WM_COMMAND,
-                MAKEWPARAM(GetDlgCtrlID(hwnd), BN_CLICKED), (LPARAM)hwnd);
+                         MAKEWPARAM(GetDlgCtrlID(hwnd), BN_CLICKED), (LPARAM)hwnd);
         }
         return 0;
 
@@ -870,68 +877,100 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         MessageBoxW(NULL, L"Failed to create Segoe UI font!", L"Warning", MB_ICONWARNING);
     }
 
-    // Load icons from system
-    HINSTANCE hShell32 = LoadLibraryW(L"shell32.dll");
+    // Initialize back and forward icons
+    g_hBackIcon = NULL;
+    g_hForwardIcon = NULL;
+
+    // Load standard system arrow icons - direct approach
+    HMODULE hShell32 = LoadLibraryW(L"shell32.dll");
     if (hShell32)
     {
-        // Try well-known navigation arrow icons in shell32.dll
-        // Shell32.dll icon indices can vary, so we're trying multiple known indices
-        const int BACK_ICON_IDS[] = {142, 137, 132, 86, 40};
-        const int FORWARD_ICON_IDS[] = {143, 138, 133, 87, 41};
+        // Try several common icon indices
+        const int backIconIds[] = {3, 77, 132, 134, 136, 308};
+        const int forwardIconIds[] = {4, 78, 133, 135, 137, 309};
 
-        // Try each icon ID until we find one that works
-        for (int i = 0; i < 5 && !g_hBackIcon; i++)
+        // Try each icon index until we find ones that work
+        for (int i = 0; i < _countof(backIconIds); i++)
         {
-            g_hBackIcon = (HICON)LoadImageW(hShell32, MAKEINTRESOURCE(BACK_ICON_IDS[i]),
-                                            IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_DEFAULTCOLOR);
-        }
+            if (!g_hBackIcon)
+            {
+                g_hBackIcon = (HICON)LoadImageW(
+                    hShell32,
+                    MAKEINTRESOURCEW(backIconIds[i]),
+                    IMAGE_ICON,
+                    ICON_SIZE, ICON_SIZE,
+                    LR_DEFAULTCOLOR
+                );
+            }
 
-        for (int i = 0; i < 5 && !g_hForwardIcon; i++)
-        {
-            g_hForwardIcon = (HICON)LoadImageW(hShell32, MAKEINTRESOURCE(FORWARD_ICON_IDS[i]),
-                                               IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_DEFAULTCOLOR);
+            if (!g_hForwardIcon)
+            {
+                g_hForwardIcon = (HICON)LoadImageW(
+                    hShell32,
+                    MAKEINTRESOURCEW(forwardIconIds[i]),
+                    IMAGE_ICON,
+                    ICON_SIZE, ICON_SIZE,
+                    LR_DEFAULTCOLOR
+                );
+            }
+
+            // Break if we loaded both icons
+            if (g_hBackIcon && g_hForwardIcon)
+            {
+                break;
+            }
         }
 
         FreeLibrary(hShell32);
     }
 
-    // If we still don't have icons, try standard system arrows
-    if (!g_hBackIcon || !g_hForwardIcon)
-    {
-        // Standard system icons
-        g_hBackIcon = (HICON)LoadImageW(NULL, MAKEINTRESOURCE(32754), IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_SHARED);
-        g_hForwardIcon = (HICON)LoadImageW(NULL, MAKEINTRESOURCE(32755), IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_SHARED);
-    }
-
-    // Create custom buttons using our custom class
-    g_hwndBackButton = CreateCustomButton(g_hwndMain, UI_PADDING, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT,
-                                         ID_BACK_BUTTON, hInstance);
-
-    g_hwndForwardButton = CreateCustomButton(g_hwndMain, UI_PADDING + BUTTON_WIDTH + 5, UI_PADDING,
-                                            BUTTON_WIDTH, BUTTON_HEIGHT, ID_FORWARD_BUTTON, hInstance);
-
-    // Set button icons or text
+    // Fallback to system arrows if necessary
     if (!g_hBackIcon)
-    {
-        SetWindowTextW(g_hwndBackButton, L"<");
-    }
-    else
+        g_hBackIcon = LoadIcon(NULL, IDI_APPLICATION);
+    if (!g_hForwardIcon)
+        g_hForwardIcon = LoadIcon(NULL, IDI_APPLICATION);
+
+    // Create STANDARD buttons (not custom) which better handle icons
+    g_hwndBackButton = CreateWindowW(
+        L"BUTTON", L"",
+        WS_CHILD | WS_VISIBLE | BS_ICON,
+        UI_PADDING, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT,
+        g_hwndMain, (HMENU)(INT_PTR)ID_BACK_BUTTON, hInstance, NULL
+    );
+
+    g_hwndForwardButton = CreateWindowW(
+        L"BUTTON", L"",
+        WS_CHILD | WS_VISIBLE | BS_ICON,
+        UI_PADDING + BUTTON_WIDTH + 5, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT,
+        g_hwndMain, (HMENU)(INT_PTR)ID_FORWARD_BUTTON, hInstance, NULL
+    );
+
+    // Set button icons using a more reliable method
+    if (g_hBackIcon)
     {
         SendMessageW(g_hwndBackButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_hBackIcon);
     }
-
-    if (!g_hForwardIcon)
-    {
-        SetWindowTextW(g_hwndForwardButton, L">");
-    }
     else
+    {
+        SetWindowTextW(g_hwndBackButton, L"←");
+    }
+
+    if (g_hForwardIcon)
     {
         SendMessageW(g_hwndForwardButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_hForwardIcon);
     }
+    else
+    {
+        SetWindowTextW(g_hwndForwardButton, L"→");
+    }
+
+    // Apply visual styles to buttons for a modern look
+    EnableWindowTheme(g_hwndBackButton, L"Navigation", L"Back");
+    EnableWindowTheme(g_hwndForwardButton, L"Navigation", L"Forward");
 
     // Calculate address bar position
     int addressBarX = UI_PADDING + (BUTTON_WIDTH + 5) * 2;
-    int addressBarWidth = 800 - addressBarX - UI_PADDING - 40; // Temporary width, will be resized in WM_SIZE
+    int addressBarWidth = 800 - addressBarX - UI_PADDING - 40;
 
     // Create address bar
     g_hwndAddressBar = CreateWindowExW(
@@ -998,4 +1037,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     }
 
     return (int)msg.wParam;
+}
+
+void EnableWindowTheme(HWND hwnd, LPCWSTR classList, LPCWSTR subApp)
+{
+    SetWindowTheme(hwnd, subApp, NULL);
 }
