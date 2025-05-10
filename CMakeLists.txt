@@ -19,8 +19,7 @@ if(WIN32)
 endif()
 
 # Source files
-file(GLOB_RECURSE SOURCES src/icon_browser.cpp)
-# file(GLOB_RECURSE SOURCES src/*.cpp)
+file(GLOB_RECURSE SOURCES src/*.cpp)
 
 # Header files
 file(GLOB_RECURSE HEADERS src/*.hpp)
