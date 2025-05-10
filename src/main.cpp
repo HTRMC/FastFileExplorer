@@ -117,7 +117,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_hwndBackButton = CreateWindowExW(
         0,
         L"BUTTON",
-        L"←", // Left arrow for back
+        L"\u25C0", // Left arrow for back
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 10, 30, 25,
         g_hwndMain,
@@ -130,7 +130,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_hwndForwardButton = CreateWindowExW(
         0,
         L"BUTTON",
-        L"→", // Right arrow for forward
+        L"\u25B6", // Right arrow for forward
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         45, 10, 30, 25,
         g_hwndMain,
