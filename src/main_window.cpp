@@ -392,9 +392,16 @@ void MainWindow::onSearchBoxTextChanged() {
     WCHAR buffer[256];
     GetWindowTextW(m_searchBox, buffer, 256);
     
-    // Convert to UTF-8
+    // Convert to UTF-8 using proper conversion function
     std::wstring wstr(buffer);
-    std::string query(wstr.begin(), wstr.end());
+
+    // Use a proper conversion function instead of direct constructor
+    std::string query;
+    int bufferSize = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (bufferSize > 0) {
+        query.resize(bufferSize - 1); // -1 to remove null terminator
+        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &query[0], bufferSize, nullptr, nullptr);
+    }
     
     // Perform search
     if (!query.empty()) {
@@ -533,16 +540,16 @@ void MainWindow::createToolbar() {
 void MainWindow::createAddressBar() {
     // Create address bar edit control
     m_addressBar = CreateWindowExW(
-    WS_EX_CLIENTEDGE,
-    L"EDIT",
-    L"",
-    WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-    0, 0, 0, 0,  // Will be positioned in onSize
-    m_hwnd,
-    reinterpret_cast<HMENU>(static_cast<UINT_PTR>(ID_ADDRESS_BAR)),
-    GetModuleHandle(NULL),
-    NULL
-);
+        WS_EX_CLIENTEDGE,
+        L"EDIT",
+        L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        0, 0, 0, 0,  // Will be positioned in onSize
+        m_hwnd,
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(ID_ADDRESS_BAR)),
+        GetModuleHandle(NULL),
+        NULL
+    );
     
     // Set default font
     HFONT hFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
@@ -558,7 +565,7 @@ void MainWindow::createSearchBox() {
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         0, 0, 0, 0,  // Will be positioned in onSize
         m_hwnd,
-        reinterpret_cast<HMENU>(ID_SEARCH_BOX),
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(ID_SEARCH_BOX)),
         GetModuleHandle(NULL),
         NULL
     );
@@ -603,7 +610,7 @@ void MainWindow::createStatusBar() {
         WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
         0, 0, 0, 0,  // Will be positioned by Windows
         m_hwnd,
-        reinterpret_cast<HMENU>(ID_STATUS_BAR),
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(ID_STATUS_BAR)),
         GetModuleHandle(NULL),
         NULL
     );
