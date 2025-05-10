@@ -533,16 +533,16 @@ void MainWindow::createToolbar() {
 void MainWindow::createAddressBar() {
     // Create address bar edit control
     m_addressBar = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"EDIT",
-        L"",
-        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-        0, 0, 0, 0,  // Will be positioned in onSize
-        m_hwnd,
-        reinterpret_cast<HMENU>(ID_ADDRESS_BAR),
-        GetModuleHandle(NULL),
-        NULL
-    );
+    WS_EX_CLIENTEDGE,
+    L"EDIT",
+    L"",
+    WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+    0, 0, 0, 0,  // Will be positioned in onSize
+    m_hwnd,
+    reinterpret_cast<HMENU>(static_cast<UINT_PTR>(ID_ADDRESS_BAR)),
+    GetModuleHandle(NULL),
+    NULL
+);
     
     // Set default font
     HFONT hFont = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
