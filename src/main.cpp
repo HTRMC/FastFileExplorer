@@ -1,23 +1,31 @@
 #include <windows.h>
 #include <commctrl.h>
+#include <cwctype>
 #include <shlwapi.h>
 #include <shellapi.h>
-#include <shlobj.h>  // Added for SHGetFolderPath
+#include <shlobj.h>
 #include <string>
 #include <vector>
 #include <filesystem>
 #include <format>
 #include <deque>
-#include <Uxtheme.h>  // For button theming
+#include <functional>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <Uxtheme.h>
+#include <algorithm>
+#include <atomic>
 
 // Link with required libraries
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "UxTheme.lib") // For button theming
+#pragma comment(lib, "UxTheme.lib")
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 namespace fs = std::filesystem;
+using namespace std::literals::chrono_literals;
 
 // Window class name
 constexpr wchar_t WINDOW_CLASS_NAME[] = L"SimpleFileExplorer";
@@ -28,12 +36,20 @@ constexpr int ID_BACK_BUTTON = 101;
 constexpr int ID_FORWARD_BUTTON = 102;
 constexpr int ID_ADDRESS_BAR = 103;
 constexpr int ID_GO_BUTTON = 104;
+constexpr int ID_SEARCH_BOX = 105;
+constexpr int ID_SEARCH_BUTTON = 106;
+constexpr int ID_STOP_SEARCH_BUTTON = 107;
 
 // UI constants
 constexpr int ICON_SIZE = 16; // Standard small icon size in Windows 11
 constexpr int BUTTON_WIDTH = 32; // Slightly wider for better touch targets
 constexpr int BUTTON_HEIGHT = 32; // Square buttons look more modern
 constexpr int UI_PADDING = 10; // Standard padding between elements
+
+// Search status
+constexpr int WM_SEARCH_RESULT = WM_USER + 1;
+constexpr int WM_SEARCH_COMPLETE = WM_USER + 2;
+constexpr int WM_SEARCH_PROGRESS = WM_USER + 3;
 
 // Colors
 constexpr COLORREF DARK_GRAY = RGB(64, 64, 64); // Dark gray color for button backgrounds
@@ -42,8 +58,12 @@ constexpr COLORREF BUTTON_TEXT_COLOR = RGB(255, 255, 255); // White text for but
 // Special paths
 constexpr wchar_t THIS_PC_NAME[] = L"This PC";
 
+// Search thread pool size
+constexpr int MAX_SEARCH_THREADS = 8;
+
 HICON g_hBackIcon = NULL;
 HICON g_hForwardIcon = NULL;
+HICON g_hSearchIcon = NULL;
 HBRUSH g_hButtonBrush = NULL; // Brush for button background
 
 // Custom button class name
@@ -56,6 +76,10 @@ HWND g_hwndAddressBar = NULL;
 HWND g_hwndBackButton = NULL;
 HWND g_hwndForwardButton = NULL;
 HWND g_hwndGoButton = NULL;
+HWND g_hwndSearchBox = NULL;
+HWND g_hwndSearchButton = NULL;
+HWND g_hwndStatusBar = NULL;
+HWND g_hwndStopSearchButton = NULL;
 HFONT g_hFont = NULL;
 fs::path g_currentPath;
 
@@ -63,11 +87,157 @@ fs::path g_currentPath;
 WNDPROC g_oldAddressBarProc = NULL;
 WNDPROC g_oldBackButtonProc = NULL;
 WNDPROC g_oldForwardButtonProc = NULL;
+WNDPROC g_oldSearchBoxProc = NULL;
 
 // Navigation history
 std::deque<fs::path> g_backHistory;
 std::deque<fs::path> g_forwardHistory;
 bool g_navigatingHistory = false;
+
+// Search related variables
+std::atomic<bool> g_isSearching = false;
+std::atomic<int> g_filesSearched = 0;
+std::atomic<int> g_filesFound = 0;
+std::atomic<int> g_directoriesSearched = 0;
+std::vector<std::jthread> g_searchThreads;
+std::mutex g_resultsMutex;
+std::vector<fs::path> g_searchResults;
+std::string g_searchTerm;
+fs::path g_searchRootPath;
+std::condition_variable g_stopSearchCV;
+std::mutex g_stopSearchMutex;
+
+class OptimizedThreadPool {
+public:
+    OptimizedThreadPool(size_t threads) : stop(false) {
+        workers.reserve(threads);
+        for (size_t i = 0; i < threads; ++i) {
+            workers.emplace_back([this, i] {
+                // Each worker gets its own task queue to reduce lock contention
+                size_t workerIndex = i;
+
+                while (true) {
+                    std::function<void()> task;
+                    bool hasTask = false;
+
+                    {
+                        // First try to get a task from this worker's preferred queue
+                        std::unique_lock<std::mutex> lock(this->queue_mutex);
+
+                        // Check if we should stop
+                        if (this->stop && this->global_tasks.empty()) {
+                            return;
+                        }
+
+                        // Try to get task from global queue
+                        if (!this->global_tasks.empty()) {
+                            task = std::move(this->global_tasks.front());
+                            this->global_tasks.pop();
+                            hasTask = true;
+                        }
+                    }
+
+                    if (hasTask) {
+                        try {
+                            task();
+                        }
+                        catch (const std::exception& e) {
+                            // Log but don't crash
+                            OutputDebugStringA(("ThreadPool exception: " + std::string(e.what())).c_str());
+                        }
+                    } else {
+                        // If no tasks, sleep briefly to reduce CPU usage
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    }
+                }
+            });
+        }
+    }
+
+    template<class F>
+    void enqueue(F&& f) {
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            if (stop) return;
+            global_tasks.emplace(std::forward<F>(f));
+        }
+        condition.notify_one();
+    }
+
+    ~OptimizedThreadPool() {
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            stop = true;
+        }
+        condition.notify_all();
+        for (auto& worker : workers) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> global_tasks;
+    std::mutex queue_mutex;
+    std::condition_variable condition;
+    bool stop;
+};
+
+// ThreadPool class for search operations
+class ThreadPool {
+public:
+    ThreadPool(size_t threads) : stop(false) {
+        for (size_t i = 0; i < threads; ++i)
+            workers.emplace_back([this] {
+                while (true) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(this->queue_mutex);
+                        this->condition.wait(lock, [this] {
+                            return this->stop || !this->tasks.empty();
+                        });
+
+                        if (this->stop && this->tasks.empty())
+                            return;
+
+                        task = std::move(this->tasks.front());
+                        this->tasks.pop();
+                    }
+                    task();
+                }
+            });
+    }
+
+    template<class F>
+    void enqueue(F&& f) {
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            if (stop)
+                throw std::runtime_error("enqueue on stopped ThreadPool");
+            tasks.emplace(std::forward<F>(f));
+        }
+        condition.notify_one();
+    }
+
+    ~ThreadPool() {
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex);
+            stop = true;
+        }
+        condition.notify_all();
+        for (std::thread &worker : workers)
+            worker.join();
+    }
+
+private:
+    std::vector<std::thread> workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex queue_mutex;
+    std::condition_variable condition;
+    bool stop;
+};
 
 // Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
@@ -86,6 +256,12 @@ void UpdateNavigationButtons();
 void ApplyFontToAllControls();
 void EnableWindowTheme(HWND hwnd, LPCWSTR classList, LPCWSTR subApp);
 HWND CreateCustomButton(HWND hwndParent, int x, int y, int width, int height, int id, HINSTANCE hInstance);
+void SearchFiles(const fs::path& rootPath, const std::wstring& searchTerm);
+void DisplaySearchResults();
+void ClearSearchResults();
+LRESULT CALLBACK SearchBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+void SearchDirectoryRecursive(const fs::path& dirPath, const std::wstring& searchTerm,
+                             ThreadPool& pool, std::atomic<bool>& isSearching);
 
 // Create a custom button with dark gray background
 HWND CreateCustomButton(HWND hwndParent, int x, int y, int width, int height, int id, HINSTANCE hInstance)
@@ -124,6 +300,40 @@ HFONT CreateSegoeUIFont(int size, bool bold)
     );
 }
 
+// Convert string to lowercase for case-insensitive comparison
+std::wstring ToLowerCase(const std::wstring& str) {
+    std::wstring lowerStr = str;
+    std::transform(lowerStr.begin(), lowerStr.end(), lowerStr.begin(),
+                   [](wchar_t c) { return std::towlower(c); });
+    return lowerStr;
+}
+
+// Replace all occurrences of a substring (case insensitive)
+void CaseInsensitiveReplace(std::wstring& str, const std::wstring& from, const std::wstring& to) {
+    std::wstring lowerStr = ToLowerCase(str);
+    std::wstring lowerFrom = ToLowerCase(from);
+
+    size_t pos = 0;
+    while ((pos = lowerStr.find(lowerFrom, pos)) != std::wstring::npos) {
+        str.replace(pos, from.length(), to);
+        lowerStr.replace(pos, lowerFrom.length(), to);
+        pos += to.length();
+    }
+}
+
+// Check if a filename matches the search term
+bool MatchesSearchTerm(const std::wstring& filename, const std::wstring& searchTerm) {
+    if (searchTerm.empty()) {
+        return true;
+    }
+
+    std::wstring lowerFilename = ToLowerCase(filename);
+    std::wstring lowerSearchTerm = ToLowerCase(searchTerm);
+
+    // Check if the search term is found in the filename
+    return lowerFilename.find(lowerSearchTerm) != std::wstring::npos;
+}
+
 // Apply Segoe UI font to all controls
 void ApplyFontToAllControls()
 {
@@ -136,6 +346,10 @@ void ApplyFontToAllControls()
         SendMessageW(g_hwndAddressBar, WM_SETFONT, (WPARAM)g_hFont, TRUE);
         SendMessageW(g_hwndGoButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
         SendMessageW(g_hwndListView, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndSearchBox, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndSearchButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndStatusBar, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndStopSearchButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     }
 }
 
@@ -207,6 +421,406 @@ std::wstring FormatFileSize(uintmax_t size)
     }
 }
 
+// Stop the search operation
+void StopSearch() {
+    if (!g_isSearching) {
+        return;
+    }
+
+    // Set the flag to stop searching
+    g_isSearching = false;
+
+    // Notify threads to stop
+    {
+        std::lock_guard<std::mutex> lock(g_stopSearchMutex);
+        g_stopSearchCV.notify_all();
+    }
+
+    // Join all search threads
+    for (auto& thread : g_searchThreads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+    // Clear the thread vector
+    g_searchThreads.clear();
+
+    // Hide stop search button
+    ShowWindow(g_hwndStopSearchButton, SW_HIDE);
+
+    // Update UI with final results
+    DisplaySearchResults();
+
+    // Update status bar
+    std::wstring status = std::format(L"Search complete. Found {} files in {} directories. Searched {} files.",
+                                     g_filesFound.load(), g_directoriesSearched.load(), g_filesSearched.load());
+    SendMessageW(g_hwndStatusBar, SB_SETTEXT, 0, (LPARAM)status.c_str());
+
+    // Post message to notify search complete
+    PostMessageW(g_hwndMain, WM_SEARCH_COMPLETE, 0, 0);
+}
+
+void InitializeSearch() {
+    // Reset counters
+    g_filesSearched = 0;
+    g_filesFound = 0;
+    g_directoriesSearched = 0;
+
+    // Clear results
+    {
+        std::lock_guard<std::mutex> lock(g_resultsMutex);
+        g_searchResults.clear();
+    }
+
+    // Show stop search button
+    ShowWindow(g_hwndStopSearchButton, SW_SHOW);
+
+    // Update status bar
+    SendMessageW(g_hwndStatusBar, SB_SETTEXT, 0, (LPARAM)L"Starting search...");
+}
+
+// Start a file search operation
+void StartFileSearch() {
+    if (g_isSearching) {
+        StopSearch();
+    }
+
+    // Get search term
+    wchar_t searchText[MAX_PATH] = {};
+    GetWindowTextW(g_hwndSearchBox, searchText, MAX_PATH);
+
+    // Trim whitespace
+    std::wstring searchTerm = searchText;
+    searchTerm.erase(0, searchTerm.find_first_not_of(L' '));
+    searchTerm.erase(searchTerm.find_last_not_of(L' ') + 1);
+
+    if (searchTerm.empty()) {
+        MessageBoxW(g_hwndMain, L"Please enter a search term.", L"Search", MB_ICONINFORMATION);
+        return;
+    }
+
+    // Determine the search root path
+    fs::path rootPath;
+    if (g_currentPath.empty()) {
+        MessageBoxW(g_hwndMain, L"Please navigate to a drive or folder to search.", L"Search", MB_ICONINFORMATION);
+        return;
+    } else {
+        rootPath = g_currentPath;
+    }
+
+    // Check if the directory is accessible
+    std::error_code ec;
+    if (!fs::exists(rootPath, ec) || !fs::is_directory(rootPath, ec)) {
+        std::wstring errorMsg = L"Cannot access directory: " + rootPath.wstring();
+        MessageBoxW(g_hwndMain, errorMsg.c_str(), L"Search Error", MB_ICONERROR);
+        return;
+    }
+
+    // Initialize search state
+    InitializeSearch();
+
+    // Start search
+    SearchFiles(rootPath, searchTerm);
+
+    // Start a timeout thread
+    std::thread timeoutThread([rootPath]() {
+        // Set timeout based on drive type (longer for network drives)
+        UINT driveType = GetDriveTypeW(rootPath.root_name().c_str());
+        int timeoutSeconds = (driveType == DRIVE_REMOTE) ? 300 : 120; // 5 min for network, 2 min for local
+
+        // Wait for timeout or completion
+        for (int i = 0; i < timeoutSeconds && g_isSearching; i++) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        // If still searching after timeout, ask user if they want to continue
+        if (g_isSearching) {
+            // Post message to UI thread to show dialog
+            PostMessageW(g_hwndMain, WM_APP + 100, 0, 0);
+        }
+    });
+
+    // Detach timeout thread
+    timeoutThread.detach();
+}
+
+// Clear search results
+void ClearSearchResults() {
+    std::lock_guard<std::mutex> lock(g_resultsMutex);
+    g_searchResults.clear();
+}
+
+// Display search results in the list view
+void DisplaySearchResults() {
+    // Clear list view and free previous items
+    int itemCount = ListView_GetItemCount(g_hwndListView);
+    for (int i = 0; i < itemCount; i++) {
+        LVITEMW lvItem = {};
+        lvItem.mask = LVIF_PARAM;
+        lvItem.iItem = i;
+
+        if (ListView_GetItem(g_hwndListView, &lvItem) && lvItem.lParam) {
+            delete reinterpret_cast<fs::path*>(lvItem.lParam);
+        }
+    }
+    ListView_DeleteAllItems(g_hwndListView);
+
+    // Copy search results to prevent locking during UI update
+    std::vector<fs::path> results;
+    {
+        std::lock_guard<std::mutex> lock(g_resultsMutex);
+        results = g_searchResults;
+    }
+
+    // Sort results alphabetically
+    std::sort(results.begin(), results.end(), [](const fs::path& a, const fs::path& b) {
+        return a.filename().wstring() < b.filename().wstring();
+    });
+
+    // Populate list view with search results
+    int index = 0;
+    for (const auto& path : results) {
+        LVITEMW lvItem = {};
+        lvItem.mask = LVIF_TEXT | LVIF_PARAM | LVIF_IMAGE;
+        lvItem.iItem = index++;
+        lvItem.iSubItem = 0;
+
+        // Store the path
+        fs::path* pathCopy = new fs::path(path);
+        lvItem.lParam = (LPARAM)pathCopy;
+
+        // Get file/folder name
+        std::wstring name = path.filename().wstring();
+        lvItem.pszText = const_cast<LPWSTR>(name.c_str());
+
+        // Add icon
+        SHFILEINFOW sfi = {};
+        SHGetFileInfoW(path.wstring().c_str(), 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON);
+        lvItem.iImage = ImageList_AddIcon(ListView_GetImageList(g_hwndListView, LVSIL_SMALL), sfi.hIcon);
+        DestroyIcon(sfi.hIcon);
+
+        // Insert item
+        int itemIndex = ListView_InsertItem(g_hwndListView, &lvItem);
+
+        // Set location (parent path)
+        std::wstring location = path.parent_path().wstring();
+        ListView_SetItemText(g_hwndListView, itemIndex, 1, const_cast<LPWSTR>(location.c_str()));
+
+        // Set type and size
+        if (fs::is_directory(path)) {
+            ListView_SetItemText(g_hwndListView, itemIndex, 2, const_cast<LPWSTR>(L"Folder"));
+            ListView_SetItemText(g_hwndListView, itemIndex, 3, const_cast<LPWSTR>(L""));
+        } else {
+            // Get file type
+            std::wstring typeDesc = GetFileTypeDescription(path);
+            ListView_SetItemText(g_hwndListView, itemIndex, 2, const_cast<LPWSTR>(typeDesc.c_str()));
+
+            // Get file size
+            uintmax_t size = 0;
+            try {
+                size = fs::file_size(path);
+            } catch (...) {
+                // Ignore errors
+            }
+
+            std::wstring sizeStr = FormatFileSize(size);
+            ListView_SetItemText(g_hwndListView, itemIndex, 3, const_cast<LPWSTR>(sizeStr.c_str()));
+        }
+    }
+
+    // Update window title
+    std::wstring windowTitle = std::format(L"Fast File Explorer - Search Results ({} items)", results.size());
+    SetWindowTextW(g_hwndMain, windowTitle.c_str());
+
+    // Set search box text as address bar text
+    wchar_t searchText[MAX_PATH] = {};
+    GetWindowTextW(g_hwndSearchBox, searchText, MAX_PATH);
+    std::wstring addressText = std::format(L"Search Results: \"{}\" in {}", searchText, g_currentPath.wstring());
+    SetWindowTextW(g_hwndAddressBar, addressText.c_str());
+}
+
+// Update search progress
+void UpdateSearchProgress() {
+    // Get current counts
+    int filesSearched = g_filesSearched.load();
+    int filesFound = g_filesFound.load();
+    int directoriesSearched = g_directoriesSearched.load();
+
+    // Update status bar
+    std::wstring status = std::format(L"Searching... Found {} files in {} directories. Searched {} files.",
+                                     filesFound, directoriesSearched, filesSearched);
+    SendMessageW(g_hwndStatusBar, SB_SETTEXT, 0, (LPARAM)status.c_str());
+}
+
+// Recursive file search function
+void SearchDirectoryRecursive(const fs::path& dirPath, const std::wstring& searchTerm,
+                             ThreadPool& pool, std::atomic<bool>& isSearching) {
+    if (!isSearching) {
+        return;
+    }
+
+    // Convert search term to lowercase once at the beginning of each thread
+    std::wstring lowerSearchTerm = ToLowerCase(searchTerm);
+
+    try {
+        // Increment directories searched counter
+        g_directoriesSearched++;
+
+        // Check stopping condition only occasionally to avoid overhead
+        std::atomic<int> entryCounter{0};
+
+        // Use error_code to avoid exceptions for common file system errors
+        std::error_code ec;
+        auto dirOptions = fs::directory_options::skip_permission_denied;
+
+        // Use a try-block for the directory iteration to handle access errors
+        try {
+            for (const auto& entry : fs::directory_iterator(dirPath, dirOptions, ec)) {
+                // Check stopping condition periodically
+                if ((++entryCounter % 100) == 0 && !isSearching) {
+                    return;
+                }
+
+                try {
+                    if (fs::is_regular_file(entry, ec)) {
+                        // Get filename once
+                        const std::wstring filename = entry.path().filename().wstring();
+
+                        // Increment files searched counter
+                        g_filesSearched++;
+
+                        // Fast case-insensitive check
+                        std::wstring lowerFilename = ToLowerCase(filename);
+                        if (lowerFilename.find(lowerSearchTerm) != std::wstring::npos) {
+                            // Increment files found counter
+                            g_filesFound++;
+
+                            // Add to results
+                            {
+                                std::lock_guard<std::mutex> lock(g_resultsMutex);
+                                g_searchResults.push_back(entry.path());
+                            }
+
+                            // Only update UI periodically to reduce overhead
+                            if (g_filesFound % 20 == 0) {
+                                PostMessageW(g_hwndMain, WM_SEARCH_RESULT, 0, 0);
+                            }
+                        }
+
+                        // Update progress less frequently
+                        if (g_filesSearched % 500 == 0) {
+                            PostMessageW(g_hwndMain, WM_SEARCH_PROGRESS, 0, 0);
+                        }
+                    }
+                    else if (fs::is_directory(entry, ec) && !fs::is_symlink(entry, ec)) {
+                        // Use thread-local counter to limit directory recursion
+                        thread_local int recursionDepth = 0;
+
+                        // Add directory to pool queue if we're not too deep in recursion
+                        if (recursionDepth < 50) {  // Limit recursion depth
+                            recursionDepth++;
+                            pool.enqueue([entry, searchTerm, &pool, &isSearching]() {
+                                SearchDirectoryRecursive(entry.path(), searchTerm, pool, isSearching);
+                            });
+                            recursionDepth--;
+                        } else {
+                            // Process directory directly for deep paths
+                            SearchDirectoryRecursive(entry.path(), searchTerm, pool, isSearching);
+                        }
+                    }
+                }
+                catch (const std::exception&) {
+                    // Skip files/directories that can't be accessed
+                    continue;
+                }
+            }
+        }
+        catch (const std::exception&) {
+            // Skip directories that can't be accessed
+        }
+    }
+    catch (const std::exception&) {
+        // Skip directories that can't be accessed
+    }
+}
+
+bool FastMatchesSearchTerm(const std::wstring& filename, const std::wstring& searchTerm) {
+    if (searchTerm.empty()) {
+        return true;
+    }
+
+    // Convert to lowercase only once per call
+    std::wstring lowerFilename = ToLowerCase(filename);
+    std::wstring lowerSearchTerm = ToLowerCase(searchTerm);
+
+    // Simple substring check
+    return lowerFilename.find(lowerSearchTerm) != std::wstring::npos;
+}
+
+// Search files function
+void SearchFiles(const fs::path& rootPath, const std::wstring& searchTerm) {
+    // Set searching flag
+    g_isSearching = true;
+
+    // Update UI
+    SendMessageW(g_hwndStatusBar, SB_SETTEXT, 0, (LPARAM)L"Starting search...");
+
+    // Clear old search threads
+    g_searchThreads.clear();
+
+    // Start search thread with a more efficient approach
+    std::jthread searchThread([rootPath, searchTerm]() {
+        try {
+            // Limit number of search threads based on CPU cores
+            int numCores = std::thread::hardware_concurrency();
+            int threadCount = std::max(2, std::min(MAX_SEARCH_THREADS, numCores));
+
+            // Create thread pool with optimal size for search operations
+            ThreadPool pool(threadCount);
+
+            // Add a timer to update UI periodically regardless of search progress
+            std::thread updateTimer([&]() {
+                while (g_isSearching) {
+                    // Update UI every half second
+                    PostMessageW(g_hwndMain, WM_SEARCH_PROGRESS, 0, 0);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                }
+            });
+
+            // Start the recursive search
+            SearchDirectoryRecursive(rootPath, searchTerm, pool, g_isSearching);
+
+            // Set searching to false to stop the update timer
+            g_isSearching = false;
+
+            // Wait for update timer to complete
+            if (updateTimer.joinable()) {
+                updateTimer.join();
+            }
+
+            // Post message to update UI with final results
+            PostMessageW(g_hwndMain, WM_SEARCH_COMPLETE, 0, 0);
+        }
+        catch (const std::exception& e) {
+            // Log error or display in status bar
+            std::string errorMsg = "Search error: ";
+            errorMsg += e.what();
+            g_isSearching = false;
+
+            // Convert to wstring for Windows API
+            std::wstring wErrorMsg(errorMsg.begin(), errorMsg.end());
+            SendMessageW(g_hwndStatusBar, SB_SETTEXT, 0, (LPARAM)wErrorMsg.c_str());
+
+            // Notify UI that search is complete (with error)
+            PostMessageW(g_hwndMain, WM_SEARCH_COMPLETE, 0, 0);
+        }
+    });
+
+    // Store the thread for proper management
+    g_searchThreads.push_back(std::move(searchThread));
+}
+
 // Navigate to a path
 void NavigateTo(const fs::path& path, bool addToHistory)
 {
@@ -245,6 +859,11 @@ void NavigateTo(const fs::path& path, bool addToHistory)
             {
                 g_forwardHistory.pop_front();
             }
+        }
+
+        // Stop any ongoing search
+        if (g_isSearching) {
+            StopSearch();
         }
 
         // Update current path and refresh view
@@ -357,6 +976,9 @@ void PopulateListView(const fs::path& path)
 
                 // Set size (not applicable for drives)
                 ListView_SetItemText(g_hwndListView, itemIndex, 2, const_cast<LPWSTR>(L""));
+
+                // Set location (empty for drives)
+                ListView_SetItemText(g_hwndListView, itemIndex, 3, const_cast<LPWSTR>(L""));
             }
 
             // Update address bar
@@ -430,6 +1052,9 @@ void PopulateListView(const fs::path& path)
                         std::wstring sizeStr = FormatFileSize(size);
                         ListView_SetItemText(g_hwndListView, itemIndex, 2, const_cast<LPWSTR>(sizeStr.c_str()));
                     }
+
+                    // Set location (parent path - empty for current directory)
+                    ListView_SetItemText(g_hwndListView, itemIndex, 3, const_cast<LPWSTR>(L""));
                 }
             }
             catch (const fs::filesystem_error& e)
@@ -495,6 +1120,13 @@ bool CreateListView(HWND hwndParent)
     lvc.cx = 100;
     lvc.fmt = LVCFMT_RIGHT;
     ListView_InsertColumn(g_hwndListView, 2, &lvc);
+
+    // Location column (for search results)
+    lvc.iSubItem = 3;
+    lvc.pszText = const_cast<LPWSTR>(L"Location");
+    lvc.cx = 300;
+    lvc.fmt = LVCFMT_LEFT;
+    ListView_InsertColumn(g_hwndListView, 3, &lvc);
 
     // Create and set image list
     HIMAGELIST hImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 32, 32);
@@ -697,6 +1329,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     switch (uMsg)
     {
+    case WM_APP + 100: // Search timeout message
+        {
+            // Only show dialog if still searching
+            if (g_isSearching) {
+                int result = MessageBoxW(hwnd,
+                    L"The search is taking a long time. Do you want to continue searching?",
+                    L"Search Taking Too Long",
+                    MB_YESNO | MB_ICONQUESTION);
+
+                if (result == IDNO) {
+                    // User wants to stop the search
+                    StopSearch();
+                }
+            }
+            return 0;
+        }
     case WM_CREATE:
         return 0;
 
@@ -712,13 +1360,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             // Adjust address bar position to account for new button sizes
             int addressBarX = UI_PADDING + (BUTTON_WIDTH + 5) * 2;
-            SetWindowPos(g_hwndAddressBar, NULL, addressBarX, UI_PADDING + 5, width - addressBarX - 45, 25,
-                         SWP_NOZORDER);
-            SetWindowPos(g_hwndGoButton, NULL, width - 40, UI_PADDING + 5, 30, 25, SWP_NOZORDER);
+            int addressBarWidth = (width * 2) / 3 - addressBarX - 45;  // 2/3 of width for address bar
+            SetWindowPos(g_hwndAddressBar, NULL, addressBarX, UI_PADDING + 5, addressBarWidth, 25, SWP_NOZORDER);
+            SetWindowPos(g_hwndGoButton, NULL, addressBarX + addressBarWidth + 5, UI_PADDING + 5, 30, 25, SWP_NOZORDER);
 
-            // Resize list view
-            SetWindowPos(g_hwndListView, NULL, 0, BUTTON_HEIGHT + 20, width, height - (BUTTON_HEIGHT + 20),
-                         SWP_NOZORDER);
+            // Search box position (after Go button)
+            int searchBoxX = addressBarX + addressBarWidth + 40;
+            int searchWidth = width - searchBoxX - 80;  // Reserve space for search button
+            SetWindowPos(g_hwndSearchBox, NULL, searchBoxX, UI_PADDING + 5, searchWidth, 25, SWP_NOZORDER);
+            SetWindowPos(g_hwndSearchButton, NULL, searchBoxX + searchWidth + 5, UI_PADDING + 5, 35, 25, SWP_NOZORDER);
+            SetWindowPos(g_hwndStopSearchButton, NULL, searchBoxX + searchWidth + 45, UI_PADDING + 5, 35, 25, SWP_NOZORDER);
+
+            // Add status bar
+            int statusBarHeight = 25;
+
+            // Resize list view (account for status bar height)
+            SetWindowPos(g_hwndListView, NULL, 0, BUTTON_HEIGHT + 20, width,
+                        height - (BUTTON_HEIGHT + 20) - statusBarHeight, SWP_NOZORDER);
+
+            // Resize status bar
+            SetWindowPos(g_hwndStatusBar, NULL, 0, height - statusBarHeight, width, statusBarHeight,
+                        SWP_NOZORDER);
             return 0;
         }
 
@@ -754,6 +1416,18 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                         NavigateTo(path);
                     }
                 }
+                return 0;
+            }
+            else if (ctrlId == ID_SEARCH_BUTTON)
+            {
+                // Start file search
+                StartFileSearch();
+                return 0;
+            }
+            else if (ctrlId == ID_STOP_SEARCH_BUTTON)
+            {
+                // Stop file search
+                StopSearch();
                 return 0;
             }
             break;
@@ -799,6 +1473,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
+
+    case WM_SEARCH_RESULT:
+        // Update UI with search results
+        DisplaySearchResults();
+        return 0;
+
+    case WM_SEARCH_COMPLETE:
+        // Search completed
+        StopSearch();
+        return 0;
+
+    case WM_SEARCH_PROGRESS:
+        // Update search progress
+        UpdateSearchProgress();
+        return 0;
 
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -947,6 +1636,56 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         NULL
     );
 
+    // Calculate search box position
+    int searchBoxX = addressBarX + addressBarWidth + 40;
+    int searchWidth = 800 - searchBoxX - 80;  // Reserve space for search button
+
+    // Create search box
+    g_hwndSearchBox = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        L"EDIT",
+        L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        searchBoxX, UI_PADDING + 5, searchWidth, 25,
+        g_hwndMain,
+        (HMENU)(INT_PTR)ID_SEARCH_BOX,
+        hInstance,
+        NULL
+    );
+
+    // Set placeholder text for search box
+    SetWindowTextW(g_hwndSearchBox, L"Search");
+
+    // Subclass the search box to handle keyboard input
+    g_oldSearchBoxProc = (WNDPROC)SetWindowLongPtr(g_hwndSearchBox, GWLP_WNDPROC, (LONG_PTR)SearchBoxProc);
+
+    // Create search button
+    g_hwndSearchButton = CreateWindowW(
+        L"BUTTON", L"🔍",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        searchBoxX + searchWidth + 5, UI_PADDING + 5, 35, 25,
+        g_hwndMain, (HMENU)(INT_PTR)ID_SEARCH_BUTTON, hInstance, NULL
+    );
+
+    // Create stop search button (initially hidden)
+    g_hwndStopSearchButton = CreateWindowW(
+        L"BUTTON", L"✖",
+        WS_CHILD | BS_PUSHBUTTON, // Initially hidden
+        searchBoxX + searchWidth + 45, UI_PADDING + 5, 35, 25,
+        g_hwndMain, (HMENU)(INT_PTR)ID_STOP_SEARCH_BUTTON, hInstance, NULL
+    );
+
+    // Create status bar
+    g_hwndStatusBar = CreateWindowExW(
+        0, STATUSCLASSNAMEW, NULL,
+        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
+        0, 0, 0, 0, // Will be sized by parent
+        g_hwndMain, NULL, hInstance, NULL
+    );
+
+    // Initialize status bar text
+    SendMessageW(g_hwndStatusBar, SB_SETTEXT, 0, (LPARAM)L"Ready");
+
     // Subclass the address bar to handle keyboard input
     g_oldAddressBarProc = (WNDPROC)SetWindowLongPtr(g_hwndAddressBar, GWLP_WNDPROC, (LONG_PTR)AddressBarProc);
 
@@ -1004,4 +1743,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 void EnableWindowTheme(HWND hwnd, LPCWSTR classList, LPCWSTR subApp)
 {
     SetWindowTheme(hwnd, subApp, NULL);
+}
+
+// Custom window procedure for search box to handle Enter key
+LRESULT CALLBACK SearchBoxProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN)
+    {
+        // Handle Enter key - start search
+        StartFileSearch();
+        return 0;
+    }
+
+    // Call the original window procedure for unhandled messages
+    return CallWindowProc(g_oldSearchBoxProc, hwnd, uMsg, wParam, lParam);
 }
