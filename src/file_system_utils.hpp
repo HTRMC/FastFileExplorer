@@ -1,11 +1,16 @@
 #pragma once
 
+#ifndef UNICODE
+#define UNICODE
+#endif
 #include <filesystem>
 #include <string>
 #include <vector>
 #include <optional>
 #include <future>
 #include <windows.h>
+#include <shellapi.h>
+#include <shlwapi.h>
 
 namespace fs = std::filesystem;
 

@@ -5,6 +5,7 @@
 #endif
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <vector>
 #include <string>
 #include <memory>

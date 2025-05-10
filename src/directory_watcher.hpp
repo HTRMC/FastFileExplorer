@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef UNICODE
+#define UNICODE
+#endif
 #include <filesystem>
 #include <functional>
 #include <thread>

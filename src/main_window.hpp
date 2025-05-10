@@ -1,6 +1,11 @@
 #pragma once
 
+#ifndef UNICODE
+#define UNICODE
+#endif
 #include <windows.h>
+#include <commctrl.h>
+#include <shellapi.h>
 #include <memory>
 #include <string>
 #include <vector>
