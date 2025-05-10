@@ -40,10 +40,10 @@ namespace FileSystemUtils {
     std::string getFileTypeDescription(const fs::path& path);
     
     // Fast directory enumeration (uses native Windows API)
-    std::vector<WIN32_FIND_DATA> enumerateDirectory(const fs::path& path);
+    std::vector<WIN32_FIND_DATAW> enumerateDirectory(const fs::path& path);
     
     // Async directory enumeration
-    using DirectoryEnumCallback = std::function<void(const WIN32_FIND_DATA&)>;
+    using DirectoryEnumCallback = std::function<void(const WIN32_FIND_DATAW&)>;
     std::future<size_t> enumerateDirectoryAsync(const fs::path& path, DirectoryEnumCallback callback);
     
     // Extract file metadata quickly

@@ -228,8 +228,8 @@ std::string getFileTypeDescription(const fs::path& path) {
     return std::format("{} File", ext.substr(1));
 }
 
-std::vector<WIN32_FIND_DATA> enumerateDirectory(const fs::path& path) {
-    std::vector<WIN32_FIND_DATA> results;
+std::vector<WIN32_FIND_DATAW> enumerateDirectory(const fs::path& path) {
+    std::vector<WIN32_FIND_DATAW> results;
     
     WIN32_FIND_DATAW findData;
     std::wstring searchPath = path.wstring() + L"\\*";
