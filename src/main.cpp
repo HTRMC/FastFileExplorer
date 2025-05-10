@@ -8,11 +8,13 @@
 #include <filesystem>
 #include <format>
 #include <deque>
+#include <Uxtheme.h>  // For button theming
 
 // Link with required libraries
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "UxTheme.lib") // For button theming
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 namespace fs = std::filesystem;
@@ -27,8 +29,25 @@ constexpr int ID_FORWARD_BUTTON = 102;
 constexpr int ID_ADDRESS_BAR = 103;
 constexpr int ID_GO_BUTTON = 104;
 
+// UI constants
+constexpr int ICON_SIZE = 16; // Standard small icon size in Windows 11
+constexpr int BUTTON_WIDTH = 32; // Slightly wider for better touch targets
+constexpr int BUTTON_HEIGHT = 32; // Square buttons look more modern
+constexpr int UI_PADDING = 10; // Standard padding between elements
+
+// Colors
+constexpr COLORREF DARK_GRAY = RGB(64, 64, 64); // Dark gray color for button backgrounds
+constexpr COLORREF BUTTON_TEXT_COLOR = RGB(255, 255, 255); // White text for buttons
+
 // Special paths
 constexpr wchar_t THIS_PC_NAME[] = L"This PC";
+
+HICON g_hBackIcon = NULL;
+HICON g_hForwardIcon = NULL;
+HBRUSH g_hButtonBrush = NULL; // Brush for button background
+
+// Custom button class name
+constexpr wchar_t CUSTOM_BUTTON_CLASS[] = L"FastFileExplorerButton";
 
 // Global variables
 HWND g_hwndMain = NULL;
@@ -42,15 +61,18 @@ fs::path g_currentPath;
 
 // Original window procedure for the address bar
 WNDPROC g_oldAddressBarProc = NULL;
+WNDPROC g_oldBackButtonProc = NULL;
+WNDPROC g_oldForwardButtonProc = NULL;
 
 // Navigation history
 std::deque<fs::path> g_backHistory;
 std::deque<fs::path> g_forwardHistory;
 bool g_navigatingHistory = false;
 
-// Forward declarations
+// Function declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK CustomButtonProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 HFONT CreateSegoeUIFont(int size, bool bold = false);
 bool CreateListView(HWND hwndParent);
 void PopulateListView(const fs::path& path);
@@ -62,145 +84,22 @@ std::wstring GetFileTypeDescription(const fs::path& path);
 std::wstring FormatFileSize(uintmax_t size);
 void UpdateNavigationButtons();
 void ApplyFontToAllControls();
+HWND CreateCustomButton(HWND hwndParent, int x, int y, int width, int height, int id, HINSTANCE hInstance);
 
-// Main entry point
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
+// Create a custom button with dark gray background
+HWND CreateCustomButton(HWND hwndParent, int x, int y, int width, int height, int id, HINSTANCE hInstance)
 {
-    // Initialize common controls
-    INITCOMMONCONTROLSEX icc = {};
-    icc.dwSize = sizeof(INITCOMMONCONTROLSEX);
-    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
-    InitCommonControlsEx(&icc);
-
-    // Register window class
-    WNDCLASSEXW wcex = {};
-    wcex.cbSize = sizeof(WNDCLASSEXW);
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
-    wcex.lpfnWndProc = WindowProc;
-    wcex.hInstance = hInstance;
-    wcex.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wcex.lpszClassName = WINDOW_CLASS_NAME;
-    wcex.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
-
-    if (!RegisterClassExW(&wcex))
-    {
-        MessageBoxW(NULL, L"Failed to register window class!", L"Error", MB_ICONERROR);
-        return 1;
-    }
-
-    // Create the main window
-    g_hwndMain = CreateWindowExW(
-        WS_EX_OVERLAPPEDWINDOW,
-        WINDOW_CLASS_NAME,
-        L"Fast File Explorer",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-        NULL, NULL, hInstance, NULL
-    );
-
-    if (!g_hwndMain)
-    {
-        MessageBoxW(NULL, L"Failed to create main window!", L"Error", MB_ICONERROR);
-        return 1;
-    }
-
-    // Create Segoe UI font
-    g_hFont = CreateSegoeUIFont(16);
-    if (!g_hFont)
-    {
-        MessageBoxW(NULL, L"Failed to create Segoe UI font!", L"Warning", MB_ICONWARNING);
-    }
-
-    // Create Back button (left arrow)
-    g_hwndBackButton = CreateWindowExW(
+    return CreateWindowExW(
         0,
-        L"BUTTON",
-        L"\u25C0", // Left arrow for back
+        CUSTOM_BUTTON_CLASS,
+        NULL,
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        10, 10, 30, 25,
-        g_hwndMain,
-        (HMENU)(INT_PTR)ID_BACK_BUTTON,
+        x, y, width, height,
+        hwndParent,
+        (HMENU)(INT_PTR)id,
         hInstance,
         NULL
     );
-
-    // Create Forward button (right arrow)
-    g_hwndForwardButton = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"\u25B6", // Right arrow for forward
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        45, 10, 30, 25,
-        g_hwndMain,
-        (HMENU)(INT_PTR)ID_FORWARD_BUTTON,
-        hInstance,
-        NULL
-    );
-
-    // Create address bar
-    g_hwndAddressBar = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        L"EDIT",
-        L"",
-        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-        85, 10, 665, 25,
-        g_hwndMain,
-        (HMENU)(INT_PTR)ID_ADDRESS_BAR,
-        hInstance,
-        NULL
-    );
-
-    // Subclass the address bar to handle keyboard input
-    g_oldAddressBarProc = (WNDPROC)SetWindowLongPtr(g_hwndAddressBar, GWLP_WNDPROC, (LONG_PTR)AddressBarProc);
-
-    // Create Go button
-    g_hwndGoButton = CreateWindowExW(
-        0,
-        L"BUTTON",
-        L"Go",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        755, 10, 30, 25,
-        g_hwndMain,
-        (HMENU)(INT_PTR)ID_GO_BUTTON,
-        hInstance,
-        NULL
-    );
-
-    // Apply Segoe UI font to all controls
-    ApplyFontToAllControls();
-
-    // Create list view
-    if (!CreateListView(g_hwndMain))
-    {
-        MessageBoxW(NULL, L"Failed to create list view!", L"Error", MB_ICONERROR);
-        return 1;
-    }
-
-    // Set initial path to drives list
-    g_currentPath = L"";
-    PopulateListView(g_currentPath);
-
-    // Show the window
-    ShowWindow(g_hwndMain, nCmdShow);
-    UpdateWindow(g_hwndMain);
-
-    // Main message loop
-    MSG msg = {};
-    while (GetMessage(&msg, NULL, 0, 0))
-    {
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
-    }
-
-    // Clean up
-    if (g_hFont)
-    {
-        DeleteObject(g_hFont);
-    }
-
-    return (int)msg.wParam;
 }
 
 // Create Segoe UI font with specified size
@@ -239,203 +138,167 @@ void ApplyFontToAllControls()
     }
 }
 
-// Custom window procedure for address bar to handle Enter key
-LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+// Get a list of available drives
+std::vector<fs::path> EnumerateDrives()
 {
-    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN)
+    std::vector<fs::path> drives;
+
+    DWORD driveMask = ::GetLogicalDrives();
+    if (driveMask == 0)
     {
-        // Handle Enter key
-        wchar_t path[MAX_PATH] = {};
-        GetWindowTextW(hwnd, path, MAX_PATH);
-        if (path[0] != '\0')
-        {
-            // Check if user typed "This PC" (case-insensitive)
-            if (_wcsicmp(path, THIS_PC_NAME) == 0)
-            {
-                NavigateTo(L""); // Empty path means "This PC" in our app
-            }
-            else
-            {
-                NavigateTo(path);
-            }
-        }
-        return 0;
+        return drives;
     }
 
-    // Call the original window procedure for unhandled messages
-    return CallWindowProc(g_oldAddressBarProc, hwnd, uMsg, wParam, lParam);
+    for (char drive = 'A'; drive <= 'Z'; drive++)
+    {
+        if ((driveMask & 1) == 1)
+        {
+            std::wstring drivePath = std::format(L"{}:\\", drive);
+            drives.push_back(drivePath);
+        }
+        driveMask >>= 1;
+    }
+
+    return drives;
 }
 
-// Window procedure
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+// Get file type description
+std::wstring GetFileTypeDescription(const fs::path& path)
 {
-    switch (uMsg)
+    SHFILEINFOW sfi = {};
+    if (SHGetFileInfoW(path.wstring().c_str(), 0, &sfi, sizeof(sfi), SHGFI_TYPENAME))
     {
-    case WM_CREATE:
-        return 0;
-
-    case WM_SIZE:
-        {
-            int width = LOWORD(lParam);
-            int height = HIWORD(lParam);
-
-            // Resize controls
-            SetWindowPos(g_hwndBackButton, NULL, 10, 10, 30, 25, SWP_NOZORDER);
-            SetWindowPos(g_hwndForwardButton, NULL, 45, 10, 30, 25, SWP_NOZORDER);
-            SetWindowPos(g_hwndAddressBar, NULL, 85, 10, width - 125, 25, SWP_NOZORDER);
-            SetWindowPos(g_hwndGoButton, NULL, width - 40, 10, 30, 25, SWP_NOZORDER);
-
-            // Resize list view
-            SetWindowPos(g_hwndListView, NULL, 0, 45, width, height - 45, SWP_NOZORDER);
-            return 0;
-        }
-
-    case WM_COMMAND:
-        {
-            int ctrlId = LOWORD(wParam);
-            int notifyCode = HIWORD(wParam);
-
-            if (ctrlId == ID_BACK_BUTTON)
-            {
-                NavigateBack();
-                return 0;
-            }
-            else if (ctrlId == ID_FORWARD_BUTTON)
-            {
-                NavigateForward();
-                return 0;
-            }
-            else if (ctrlId == ID_GO_BUTTON)
-            {
-                // Get path from address bar and navigate to it
-                wchar_t path[MAX_PATH] = {};
-                GetWindowTextW(g_hwndAddressBar, path, MAX_PATH);
-                if (path[0] != '\0')
-                {
-                    // Check if user typed "This PC" (case-insensitive)
-                    if (_wcsicmp(path, THIS_PC_NAME) == 0)
-                    {
-                        NavigateTo(L""); // Empty path means "This PC" in our app
-                    }
-                    else
-                    {
-                        NavigateTo(path);
-                    }
-                }
-                return 0;
-            }
-            break;
-        }
-
-    case WM_NOTIFY:
-        {
-            NMHDR* nmhdr = (NMHDR*)lParam;
-
-            if (nmhdr->hwndFrom == g_hwndListView)
-            {
-                switch (nmhdr->code)
-                {
-                case NM_DBLCLK:
-                    {
-                        NMITEMACTIVATE* nmia = (NMITEMACTIVATE*)lParam;
-                        int itemIndex = nmia->iItem;
-
-                        if (itemIndex >= 0)
-                        {
-                            LVITEMW lvItem = {};
-                            wchar_t buffer[MAX_PATH] = {};
-
-                            lvItem.mask = LVIF_TEXT | LVIF_PARAM;
-                            lvItem.iItem = itemIndex;
-                            lvItem.iSubItem = 0;
-                            lvItem.pszText = buffer;
-                            lvItem.cchTextMax = MAX_PATH;
-
-                            ListView_GetItem(g_hwndListView, &lvItem);
-
-                            fs::path* itemPath = (fs::path*)lvItem.lParam;
-                            if (itemPath)
-                            {
-                                // Create a copy of the path to use in NavigateTo
-                                fs::path pathCopy = *itemPath;
-                                NavigateTo(pathCopy);
-                            }
-                        }
-                        return 0;
-                    }
-                }
-            }
-            break;
-        }
-
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        return 0;
+        return sfi.szTypeName;
     }
 
-    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+    return L"File";
 }
 
-// Create the list view control
-bool CreateListView(HWND hwndParent)
+// Format file size
+std::wstring FormatFileSize(uintmax_t size)
 {
-    // Create list view control
-    g_hwndListView = CreateWindowExW(
-        WS_EX_CLIENTEDGE,
-        WC_LISTVIEWW,
-        L"",
-        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHAREIMAGELISTS | LVS_SINGLESEL,
-        0, 45, 0, 0, // Will be resized in WM_SIZE
-        hwndParent,
-        (HMENU)(INT_PTR)ID_FILE_LIST,
-        GetModuleHandle(NULL),
-        NULL
-    );
+    constexpr const wchar_t* SUFFIXES[] = {L"B", L"KB", L"MB", L"GB", L"TB"};
 
-    if (!g_hwndListView)
+    double dblSize = static_cast<double>(size);
+    int suffixIndex = 0;
+
+    while (dblSize >= 1024.0 && suffixIndex < 4)
     {
-        return false;
+        dblSize /= 1024.0;
+        suffixIndex++;
     }
 
-    // Set extended list view styles
-    ListView_SetExtendedListViewStyle(g_hwndListView, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-
-    // Add columns
-    LVCOLUMNW lvc = {};
-    lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
-
-    // Name column
-    lvc.iSubItem = 0;
-    lvc.pszText = const_cast<LPWSTR>(L"Name");
-    lvc.cx = 300;
-    lvc.fmt = LVCFMT_LEFT;
-    ListView_InsertColumn(g_hwndListView, 0, &lvc);
-
-    // Type column
-    lvc.iSubItem = 1;
-    lvc.pszText = const_cast<LPWSTR>(L"Type");
-    lvc.cx = 150;
-    lvc.fmt = LVCFMT_LEFT;
-    ListView_InsertColumn(g_hwndListView, 1, &lvc);
-
-    // Size column
-    lvc.iSubItem = 2;
-    lvc.pszText = const_cast<LPWSTR>(L"Size");
-    lvc.cx = 100;
-    lvc.fmt = LVCFMT_RIGHT;
-    ListView_InsertColumn(g_hwndListView, 2, &lvc);
-
-    // Create and set image list
-    HIMAGELIST hImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 32, 32);
-    ListView_SetImageList(g_hwndListView, hImageList, LVSIL_SMALL);
-
-    // Apply font to list view
-    if (g_hFont)
+    if (suffixIndex == 0)
     {
-        SendMessageW(g_hwndListView, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        return std::format(L"{} {}", size, SUFFIXES[suffixIndex]);
     }
+    else if (dblSize < 10)
+    {
+        return std::format(L"{:.2f} {}", dblSize, SUFFIXES[suffixIndex]);
+    }
+    else if (dblSize < 100)
+    {
+        return std::format(L"{:.1f} {}", dblSize, SUFFIXES[suffixIndex]);
+    }
+    else
+    {
+        return std::format(L"{:.0f} {}", dblSize, SUFFIXES[suffixIndex]);
+    }
+}
 
-    return true;
+// Navigate to a path
+void NavigateTo(const fs::path& path, bool addToHistory)
+{
+    try
+    {
+        fs::path newPath;
+
+        if (path.empty())
+        {
+            // Special case for drives
+            newPath = L"";
+        }
+        else if (fs::is_directory(path))
+        {
+            newPath = path;
+        }
+        else if (fs::exists(path))
+        {
+            // If it's a file, open it
+            ShellExecuteW(g_hwndMain, L"open", path.wstring().c_str(), NULL, NULL, SW_SHOW);
+            return;
+        }
+        else
+        {
+            MessageBoxW(g_hwndMain, L"The specified path does not exist.", L"Error", MB_ICONERROR);
+            return;
+        }
+
+        // Add current path to back history if it's a new navigation
+        if (addToHistory && !g_navigatingHistory && !g_currentPath.empty())
+        {
+            g_backHistory.push_front(g_currentPath);
+
+            // Clear forward history when navigating to a new path
+            while (!g_forwardHistory.empty())
+            {
+                g_forwardHistory.pop_front();
+            }
+        }
+
+        // Update current path and refresh view
+        g_currentPath = newPath;
+        PopulateListView(g_currentPath);
+    }
+    catch (const std::exception& e)
+    {
+        MessageBoxA(g_hwndMain, e.what(), "Error", MB_ICONERROR);
+    }
+}
+
+// Navigate back
+void NavigateBack()
+{
+    if (!g_backHistory.empty())
+    {
+        // Add current location to forward history
+        g_forwardHistory.push_front(g_currentPath);
+
+        // Get the back location
+        fs::path backPath = g_backHistory.front();
+        g_backHistory.pop_front();
+
+        // Navigate without adding to history
+        g_navigatingHistory = true;
+        NavigateTo(backPath, false);
+        g_navigatingHistory = false;
+    }
+}
+
+// Navigate forward
+void NavigateForward()
+{
+    if (!g_forwardHistory.empty())
+    {
+        // Add current location to back history
+        g_backHistory.push_front(g_currentPath);
+
+        // Get the forward location
+        fs::path forwardPath = g_forwardHistory.front();
+        g_forwardHistory.pop_front();
+
+        // Navigate without adding to history
+        g_navigatingHistory = true;
+        NavigateTo(forwardPath, false);
+        g_navigatingHistory = false;
+    }
+}
+
+// Update the state of navigation buttons
+void UpdateNavigationButtons()
+{
+    EnableWindow(g_hwndBackButton, !g_backHistory.empty());
+    EnableWindow(g_hwndForwardButton, !g_forwardHistory.empty());
 }
 
 // Populate the list view with files and folders
@@ -583,165 +446,556 @@ void PopulateListView(const fs::path& path)
     UpdateNavigationButtons();
 }
 
-// Navigate to a path
-void NavigateTo(const fs::path& path, bool addToHistory)
+// Create the list view control
+bool CreateListView(HWND hwndParent)
 {
-    try
+    // Create list view control
+    g_hwndListView = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        WC_LISTVIEWW,
+        L"",
+        WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHAREIMAGELISTS | LVS_SINGLESEL,
+        0, BUTTON_HEIGHT + 20, 0, 0, // Will be resized in WM_SIZE
+        hwndParent,
+        (HMENU)(INT_PTR)ID_FILE_LIST,
+        GetModuleHandle(NULL),
+        NULL
+    );
+
+    if (!g_hwndListView)
     {
-        fs::path newPath;
+        return false;
+    }
 
-        if (path.empty())
-        {
-            // Special case for drives
-            newPath = L"";
-        }
-        else if (fs::is_directory(path))
-        {
-            newPath = path;
-        }
-        else if (fs::exists(path))
-        {
-            // If it's a file, open it
-            ShellExecuteW(g_hwndMain, L"open", path.wstring().c_str(), NULL, NULL, SW_SHOW);
-            return;
-        }
-        else
-        {
-            MessageBoxW(g_hwndMain, L"The specified path does not exist.", L"Error", MB_ICONERROR);
-            return;
-        }
+    // Set extended list view styles
+    ListView_SetExtendedListViewStyle(g_hwndListView, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
 
-        // Add current path to back history if it's a new navigation
-        if (addToHistory && !g_navigatingHistory && !g_currentPath.empty())
-        {
-            g_backHistory.push_front(g_currentPath);
+    // Add columns
+    LVCOLUMNW lvc = {};
+    lvc.mask = LVCF_FMT | LVCF_WIDTH | LVCF_TEXT | LVCF_SUBITEM;
 
-            // Clear forward history when navigating to a new path
-            while (!g_forwardHistory.empty())
+    // Name column
+    lvc.iSubItem = 0;
+    lvc.pszText = const_cast<LPWSTR>(L"Name");
+    lvc.cx = 300;
+    lvc.fmt = LVCFMT_LEFT;
+    ListView_InsertColumn(g_hwndListView, 0, &lvc);
+
+    // Type column
+    lvc.iSubItem = 1;
+    lvc.pszText = const_cast<LPWSTR>(L"Type");
+    lvc.cx = 150;
+    lvc.fmt = LVCFMT_LEFT;
+    ListView_InsertColumn(g_hwndListView, 1, &lvc);
+
+    // Size column
+    lvc.iSubItem = 2;
+    lvc.pszText = const_cast<LPWSTR>(L"Size");
+    lvc.cx = 100;
+    lvc.fmt = LVCFMT_RIGHT;
+    ListView_InsertColumn(g_hwndListView, 2, &lvc);
+
+    // Create and set image list
+    HIMAGELIST hImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 32, 32);
+    ListView_SetImageList(g_hwndListView, hImageList, LVSIL_SMALL);
+
+    // Apply font to list view
+    if (g_hFont)
+    {
+        SendMessageW(g_hwndListView, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+    }
+
+    return true;
+}
+
+// Custom window procedure for address bar to handle Enter key
+LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN)
+    {
+        // Handle Enter key
+        wchar_t path[MAX_PATH] = {};
+        GetWindowTextW(hwnd, path, MAX_PATH);
+        if (path[0] != '\0')
+        {
+            // Check if user typed "This PC" (case-insensitive)
+            if (_wcsicmp(path, THIS_PC_NAME) == 0)
             {
-                g_forwardHistory.pop_front();
+                NavigateTo(L""); // Empty path means "This PC" in our app
+            }
+            else
+            {
+                NavigateTo(path);
             }
         }
+        return 0;
+    }
 
-        // Update current path and refresh view
-        g_currentPath = newPath;
-        PopulateListView(g_currentPath);
-    }
-    catch (const std::exception& e)
-    {
-        MessageBoxA(g_hwndMain, e.what(), "Error", MB_ICONERROR);
-    }
+    // Call the original window procedure for unhandled messages
+    return CallWindowProc(g_oldAddressBarProc, hwnd, uMsg, wParam, lParam);
 }
 
-// Navigate back
-void NavigateBack()
+// Custom window procedure for buttons with dark gray background
+LRESULT CALLBACK CustomButtonProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    if (!g_backHistory.empty())
+    static bool isTracking = false;
+    static bool isPressed = false;
+    static HBRUSH hHoverBrush = CreateSolidBrush(RGB(80, 80, 80)); // Slightly lighter gray for hover
+    static HBRUSH hPressedBrush = CreateSolidBrush(RGB(40, 40, 40)); // Slightly darker gray for pressed
+
+    switch (uMsg)
     {
-        // Add current location to forward history
-        g_forwardHistory.push_front(g_currentPath);
-
-        // Get the back location
-        fs::path backPath = g_backHistory.front();
-        g_backHistory.pop_front();
-
-        // Navigate without adding to history
-        g_navigatingHistory = true;
-        NavigateTo(backPath, false);
-        g_navigatingHistory = false;
-    }
-}
-
-// Navigate forward
-void NavigateForward()
-{
-    if (!g_forwardHistory.empty())
-    {
-        // Add current location to back history
-        g_backHistory.push_front(g_currentPath);
-
-        // Get the forward location
-        fs::path forwardPath = g_forwardHistory.front();
-        g_forwardHistory.pop_front();
-
-        // Navigate without adding to history
-        g_navigatingHistory = true;
-        NavigateTo(forwardPath, false);
-        g_navigatingHistory = false;
-    }
-}
-
-// Update the state of navigation buttons
-void UpdateNavigationButtons()
-{
-    EnableWindow(g_hwndBackButton, !g_backHistory.empty());
-    EnableWindow(g_hwndForwardButton, !g_forwardHistory.empty());
-}
-
-// Get a list of available drives
-std::vector<fs::path> EnumerateDrives()
-{
-    std::vector<fs::path> drives;
-
-    DWORD driveMask = ::GetLogicalDrives();
-    if (driveMask == 0)
-    {
-        return drives;
-    }
-
-    for (char drive = 'A'; drive <= 'Z'; drive++)
-    {
-        if ((driveMask & 1) == 1)
+    case WM_PAINT:
         {
-            std::wstring drivePath = std::format(L"{}:\\", drive);
-            drives.push_back(drivePath);
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+
+            // Select the appropriate brush based on button state
+            HBRUSH hBrush = g_hButtonBrush; // Default
+            if (isPressed)
+                hBrush = hPressedBrush;
+            else if (isTracking)
+                hBrush = hHoverBrush;
+
+            // Fill the background
+            FillRect(hdc, &rect, hBrush);
+
+            // Get button text and icon
+            wchar_t text[256] = {0};
+            GetWindowTextW(hwnd, text, 256);
+            HICON hIcon = (HICON)SendMessageW(hwnd, BM_GETIMAGE, IMAGE_ICON, 0);
+
+            // Set up for drawing text
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, BUTTON_TEXT_COLOR);
+
+            if (hIcon)
+            {
+                // Draw icon centered
+                int iconX = (rect.right - rect.left - ICON_SIZE) / 2;
+                int iconY = (rect.bottom - rect.top - ICON_SIZE) / 2;
+                DrawIconEx(hdc, iconX, iconY, hIcon, ICON_SIZE, ICON_SIZE, 0, NULL, DI_NORMAL);
+            }
+            else if (text[0] != '\0')
+            {
+                // Draw text centered
+                DrawTextW(hdc, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            }
+
+            // Draw focus rectangle if button has focus
+            if (GetFocus() == hwnd)
+            {
+                RECT focusRect = rect;
+                InflateRect(&focusRect, -3, -3);
+                DrawFocusRect(hdc, &focusRect);
+            }
+
+            EndPaint(hwnd, &ps);
+            return 0;
         }
-        driveMask >>= 1;
+
+    case WM_MOUSEMOVE:
+        if (!isTracking)
+        {
+            // Start tracking mouse events to detect when mouse leaves
+            TRACKMOUSEEVENT tme = {0};
+            tme.cbSize = sizeof(TRACKMOUSEEVENT);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            if (TrackMouseEvent(&tme))
+            {
+                isTracking = true;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        return 0;
+
+    case WM_MOUSELEAVE:
+        isTracking = false;
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case WM_LBUTTONDOWN:
+        isPressed = true;
+        SetCapture(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case WM_LBUTTONUP:
+        if (isPressed)
+        {
+            isPressed = false;
+            ReleaseCapture();
+            InvalidateRect(hwnd, NULL, FALSE);
+
+            // Send click notification to parent
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+            POINT pt = {LOWORD(lParam), HIWORD(lParam)};
+            if (PtInRect(&rect, pt))
+            {
+                SendMessageW(GetParent(hwnd), WM_COMMAND,
+                    MAKEWPARAM(GetDlgCtrlID(hwnd), BN_CLICKED), (LPARAM)hwnd);
+            }
+        }
+        return 0;
+
+    case WM_SETTEXT:
+        {
+            LRESULT result = DefWindowProcW(hwnd, uMsg, wParam, lParam);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return result;
+        }
+
+    case WM_GETDLGCODE:
+        return DLGC_BUTTON | DLGC_WANTARROWS;
+
+    case WM_KEYDOWN:
+        if (wParam == VK_SPACE || wParam == VK_RETURN)
+        {
+            isPressed = true;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+
+    case WM_KEYUP:
+        if ((wParam == VK_SPACE || wParam == VK_RETURN) && isPressed)
+        {
+            isPressed = false;
+            InvalidateRect(hwnd, NULL, FALSE);
+            SendMessageW(GetParent(hwnd), WM_COMMAND,
+                MAKEWPARAM(GetDlgCtrlID(hwnd), BN_CLICKED), (LPARAM)hwnd);
+        }
+        return 0;
+
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
+
+    case WM_DESTROY:
+        DeleteObject(hHoverBrush);
+        DeleteObject(hPressedBrush);
+        return 0;
     }
 
-    return drives;
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
 
-// Get file type description
-std::wstring GetFileTypeDescription(const fs::path& path)
+// Window procedure
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-    SHFILEINFOW sfi = {};
-    if (SHGetFileInfoW(path.wstring().c_str(), 0, &sfi, sizeof(sfi), SHGFI_TYPENAME))
+    switch (uMsg)
     {
-        return sfi.szTypeName;
+    case WM_CREATE:
+        return 0;
+
+    case WM_SIZE:
+        {
+            int width = LOWORD(lParam);
+            int height = HIWORD(lParam);
+
+            // Resize controls with the new BUTTON_WIDTH and BUTTON_HEIGHT
+            SetWindowPos(g_hwndBackButton, NULL, UI_PADDING, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT, SWP_NOZORDER);
+            SetWindowPos(g_hwndForwardButton, NULL, UI_PADDING + BUTTON_WIDTH + 5, UI_PADDING, BUTTON_WIDTH,
+                         BUTTON_HEIGHT, SWP_NOZORDER);
+
+            // Adjust address bar position to account for new button sizes
+            int addressBarX = UI_PADDING + (BUTTON_WIDTH + 5) * 2;
+            SetWindowPos(g_hwndAddressBar, NULL, addressBarX, UI_PADDING + 5, width - addressBarX - 45, 25,
+                         SWP_NOZORDER);
+            SetWindowPos(g_hwndGoButton, NULL, width - 40, UI_PADDING + 5, 30, 25, SWP_NOZORDER);
+
+            // Resize list view
+            SetWindowPos(g_hwndListView, NULL, 0, BUTTON_HEIGHT + 20, width, height - (BUTTON_HEIGHT + 20),
+                         SWP_NOZORDER);
+            return 0;
+        }
+
+    case WM_COMMAND:
+        {
+            int ctrlId = LOWORD(wParam);
+            int notifyCode = HIWORD(wParam);
+
+            if (ctrlId == ID_BACK_BUTTON)
+            {
+                NavigateBack();
+                return 0;
+            }
+            else if (ctrlId == ID_FORWARD_BUTTON)
+            {
+                NavigateForward();
+                return 0;
+            }
+            else if (ctrlId == ID_GO_BUTTON)
+            {
+                // Get path from address bar and navigate to it
+                wchar_t path[MAX_PATH] = {};
+                GetWindowTextW(g_hwndAddressBar, path, MAX_PATH);
+                if (path[0] != '\0')
+                {
+                    // Check if user typed "This PC" (case-insensitive)
+                    if (_wcsicmp(path, THIS_PC_NAME) == 0)
+                    {
+                        NavigateTo(L""); // Empty path means "This PC" in our app
+                    }
+                    else
+                    {
+                        NavigateTo(path);
+                    }
+                }
+                return 0;
+            }
+            break;
+        }
+
+    case WM_NOTIFY:
+        {
+            NMHDR* nmhdr = (NMHDR*)lParam;
+
+            if (nmhdr->hwndFrom == g_hwndListView)
+            {
+                switch (nmhdr->code)
+                {
+                case NM_DBLCLK:
+                    {
+                        NMITEMACTIVATE* nmia = (NMITEMACTIVATE*)lParam;
+                        int itemIndex = nmia->iItem;
+
+                        if (itemIndex >= 0)
+                        {
+                            LVITEMW lvItem = {};
+                            wchar_t buffer[MAX_PATH] = {};
+
+                            lvItem.mask = LVIF_TEXT | LVIF_PARAM;
+                            lvItem.iItem = itemIndex;
+                            lvItem.iSubItem = 0;
+                            lvItem.pszText = buffer;
+                            lvItem.cchTextMax = MAX_PATH;
+
+                            ListView_GetItem(g_hwndListView, &lvItem);
+
+                            fs::path* itemPath = (fs::path*)lvItem.lParam;
+                            if (itemPath)
+                            {
+                                // Create a copy of the path to use in NavigateTo
+                                fs::path pathCopy = *itemPath;
+                                NavigateTo(pathCopy);
+                            }
+                        }
+                        return 0;
+                    }
+                }
+            }
+            break;
+        }
+
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
     }
 
-    return L"File";
+    return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
 
-// Format file size
-std::wstring FormatFileSize(uintmax_t size)
+// Main entry point
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
-    constexpr const wchar_t* SUFFIXES[] = {L"B", L"KB", L"MB", L"GB", L"TB"};
+    // Initialize common controls
+    INITCOMMONCONTROLSEX icc = {};
+    icc.dwSize = sizeof(INITCOMMONCONTROLSEX);
+    icc.dwICC = ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
+    InitCommonControlsEx(&icc);
 
-    double dblSize = static_cast<double>(size);
-    int suffixIndex = 0;
+    // Create brush for dark gray background
+    g_hButtonBrush = CreateSolidBrush(DARK_GRAY);
 
-    while (dblSize >= 1024.0 && suffixIndex < 4)
+    // Register custom button class
+    WNDCLASSEX wcButton = {};
+    wcButton.cbSize = sizeof(WNDCLASSEX);
+    wcButton.style = CS_HREDRAW | CS_VREDRAW | CS_GLOBALCLASS;
+    wcButton.lpfnWndProc = CustomButtonProc;
+    wcButton.hInstance = hInstance;
+    wcButton.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wcButton.hbrBackground = g_hButtonBrush;
+    wcButton.lpszClassName = CUSTOM_BUTTON_CLASS;
+
+    if (!RegisterClassEx(&wcButton))
     {
-        dblSize /= 1024.0;
-        suffixIndex++;
+        MessageBoxW(NULL, L"Failed to register custom button class!", L"Error", MB_ICONERROR);
+        return 1;
     }
 
-    if (suffixIndex == 0)
+    // Register window class
+    WNDCLASSEXW wcex = {};
+    wcex.cbSize = sizeof(WNDCLASSEXW);
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = WindowProc;
+    wcex.hInstance = hInstance;
+    wcex.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcex.lpszClassName = WINDOW_CLASS_NAME;
+    wcex.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
+
+    if (!RegisterClassExW(&wcex))
     {
-        return std::format(L"{} {}", size, SUFFIXES[suffixIndex]);
+        MessageBoxW(NULL, L"Failed to register window class!", L"Error", MB_ICONERROR);
+        return 1;
     }
-    else if (dblSize < 10)
+
+    // Create the main window
+    g_hwndMain = CreateWindowExW(
+        WS_EX_OVERLAPPEDWINDOW,
+        WINDOW_CLASS_NAME,
+        L"Fast File Explorer",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        NULL, NULL, hInstance, NULL
+    );
+
+    if (!g_hwndMain)
     {
-        return std::format(L"{:.2f} {}", dblSize, SUFFIXES[suffixIndex]);
+        MessageBoxW(NULL, L"Failed to create main window!", L"Error", MB_ICONERROR);
+        return 1;
     }
-    else if (dblSize < 100)
+
+    // Create Segoe UI font
+    g_hFont = CreateSegoeUIFont(16);
+    if (!g_hFont)
     {
-        return std::format(L"{:.1f} {}", dblSize, SUFFIXES[suffixIndex]);
+        MessageBoxW(NULL, L"Failed to create Segoe UI font!", L"Warning", MB_ICONWARNING);
+    }
+
+    // Load icons from system
+    HINSTANCE hShell32 = LoadLibraryW(L"shell32.dll");
+    if (hShell32)
+    {
+        // Try well-known navigation arrow icons in shell32.dll
+        // Shell32.dll icon indices can vary, so we're trying multiple known indices
+        const int BACK_ICON_IDS[] = {142, 137, 132, 86, 40};
+        const int FORWARD_ICON_IDS[] = {143, 138, 133, 87, 41};
+
+        // Try each icon ID until we find one that works
+        for (int i = 0; i < 5 && !g_hBackIcon; i++)
+        {
+            g_hBackIcon = (HICON)LoadImageW(hShell32, MAKEINTRESOURCE(BACK_ICON_IDS[i]),
+                                            IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_DEFAULTCOLOR);
+        }
+
+        for (int i = 0; i < 5 && !g_hForwardIcon; i++)
+        {
+            g_hForwardIcon = (HICON)LoadImageW(hShell32, MAKEINTRESOURCE(FORWARD_ICON_IDS[i]),
+                                               IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_DEFAULTCOLOR);
+        }
+
+        FreeLibrary(hShell32);
+    }
+
+    // If we still don't have icons, try standard system arrows
+    if (!g_hBackIcon || !g_hForwardIcon)
+    {
+        // Standard system icons
+        g_hBackIcon = (HICON)LoadImageW(NULL, MAKEINTRESOURCE(32754), IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_SHARED);
+        g_hForwardIcon = (HICON)LoadImageW(NULL, MAKEINTRESOURCE(32755), IMAGE_ICON, ICON_SIZE, ICON_SIZE, LR_SHARED);
+    }
+
+    // Create custom buttons using our custom class
+    g_hwndBackButton = CreateCustomButton(g_hwndMain, UI_PADDING, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT,
+                                         ID_BACK_BUTTON, hInstance);
+
+    g_hwndForwardButton = CreateCustomButton(g_hwndMain, UI_PADDING + BUTTON_WIDTH + 5, UI_PADDING,
+                                            BUTTON_WIDTH, BUTTON_HEIGHT, ID_FORWARD_BUTTON, hInstance);
+
+    // Set button icons or text
+    if (!g_hBackIcon)
+    {
+        SetWindowTextW(g_hwndBackButton, L"<");
     }
     else
     {
-        return std::format(L"{:.0f} {}", dblSize, SUFFIXES[suffixIndex]);
+        SendMessageW(g_hwndBackButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_hBackIcon);
     }
+
+    if (!g_hForwardIcon)
+    {
+        SetWindowTextW(g_hwndForwardButton, L">");
+    }
+    else
+    {
+        SendMessageW(g_hwndForwardButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_hForwardIcon);
+    }
+
+    // Calculate address bar position
+    int addressBarX = UI_PADDING + (BUTTON_WIDTH + 5) * 2;
+    int addressBarWidth = 800 - addressBarX - UI_PADDING - 40; // Temporary width, will be resized in WM_SIZE
+
+    // Create address bar
+    g_hwndAddressBar = CreateWindowExW(
+        WS_EX_CLIENTEDGE,
+        L"EDIT",
+        L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+        addressBarX, UI_PADDING + 5, addressBarWidth, 25,
+        g_hwndMain,
+        (HMENU)(INT_PTR)ID_ADDRESS_BAR,
+        hInstance,
+        NULL
+    );
+
+    // Subclass the address bar to handle keyboard input
+    g_oldAddressBarProc = (WNDPROC)SetWindowLongPtr(g_hwndAddressBar, GWLP_WNDPROC, (LONG_PTR)AddressBarProc);
+
+    // Create Go button with the custom class
+    g_hwndGoButton = CreateCustomButton(g_hwndMain, 755, UI_PADDING + 5, 30, 25, ID_GO_BUTTON, hInstance);
+    SetWindowTextW(g_hwndGoButton, L"Go");
+
+    // Apply Segoe UI font to all controls
+    ApplyFontToAllControls();
+
+    // Create list view
+    if (!CreateListView(g_hwndMain))
+    {
+        MessageBoxW(NULL, L"Failed to create list view!", L"Error", MB_ICONERROR);
+        return 1;
+    }
+
+    // Set initial path to drives list
+    g_currentPath = L"";
+    PopulateListView(g_currentPath);
+
+    // Show the window
+    ShowWindow(g_hwndMain, nCmdShow);
+    UpdateWindow(g_hwndMain);
+
+    // Main message loop
+    MSG msg = {};
+    while (GetMessage(&msg, NULL, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    // Clean up
+    if (g_hFont)
+    {
+        DeleteObject(g_hFont);
+    }
+    if (g_hButtonBrush)
+    {
+        DeleteObject(g_hButtonBrush);
+    }
+    if (g_hBackIcon)
+    {
+        DestroyIcon(g_hBackIcon);
+    }
+    if (g_hForwardIcon)
+    {
+        DestroyIcon(g_hForwardIcon);
+    }
+
+    return (int)msg.wParam;
 }
