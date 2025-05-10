@@ -215,15 +215,23 @@ void MainWindow::onCreate() {
     createToolbar();
     createAddressBar();
     createSearchBox();
-    createFileListView();
     createStatusBar();
     createSideBar();
-    
+    createFileListView();  // Create file list view after the others
+
+    // Initial layout
+    RECT rc;
+    GetClientRect(m_hwnd, &rc);
+    onSize(rc.right - rc.left, rc.bottom - rc.top);
+
     // Update UI
     updateTitle();
     updateAddressBar();
     updateStatusBar();
     
+    // Add debug message to help diagnose issues
+    OutputDebugStringW(L"MainWindow::onCreate completed\n");
+
     // Navigate to initial directory
     m_fileExplorer->navigateTo(m_fileExplorer->getCurrentPath());
 }
@@ -266,18 +274,27 @@ void MainWindow::onSize(int width, int height) {
     }
     
     // Resize file list view (center area)
-    if (m_fileListView) {
+    if (m_fileListView && m_fileListView->getHandle()) {
         int fileListTop = TOOLBAR_HEIGHT + PADDING;
         int fileListHeight = height - TOOLBAR_HEIGHT - STATUS_BAR_HEIGHT - PADDING * 2;
         
-        m_fileListView->resize(width - SIDE_BAR_WIDTH - PADDING * 2, fileListHeight);
-        
-        HWND fileListHwnd = m_fileListView->getHandle();
-        SetWindowPos(fileListHwnd, NULL, 
-            SIDE_BAR_WIDTH + PADDING, fileListTop, 
-            width - SIDE_BAR_WIDTH - PADDING * 2, fileListHeight, 
-            SWP_NOZORDER);
+        // Check for valid dimensions before resizing
+        if (width > SIDE_BAR_WIDTH + PADDING * 2 && fileListHeight > 0) {
+            m_fileListView->resize(width - SIDE_BAR_WIDTH - PADDING * 2, fileListHeight);
+
+            HWND fileListHwnd = m_fileListView->getHandle();
+            SetWindowPos(fileListHwnd, NULL,
+                SIDE_BAR_WIDTH + PADDING, fileListTop,
+                width - SIDE_BAR_WIDTH - PADDING * 2, fileListHeight,
+                SWP_NOZORDER);
+
+            // Force redraw
+            InvalidateRect(fileListHwnd, NULL, TRUE);
+        }
     }
+
+    // Force window redraw
+    InvalidateRect(m_hwnd, NULL, TRUE);
 }
 
 void MainWindow::onCommand(int id, int notifyCode, HWND control) {
@@ -508,9 +525,14 @@ void MainWindow::updateStatusBar() {
 }
 
 void MainWindow::onFilesLoaded(const std::vector<FileExplorer::FileItem>& files) {
+    OutputDebugStringW((L"Files loaded: " + std::to_wstring(files.size()) + L"\n").c_str());
+
     // Update the file list view
-    if (m_fileListView) {
+    if (m_fileListView && m_fileListView->getHandle()) {
         m_fileListView->loadFiles(files);
+
+        // Force redraw
+        InvalidateRect(m_fileListView->getHandle(), NULL, TRUE);
     }
     
     // Update UI
@@ -578,7 +600,11 @@ void MainWindow::createSearchBox() {
 void MainWindow::createFileListView() {
     // Create file list view
     m_fileListView = std::make_unique<FileListView>(m_hwnd);
-    m_fileListView->create();
+
+    if (!m_fileListView->create()) {
+        MessageBoxW(m_hwnd, L"Failed to create file list view!", L"Error", MB_ICONERROR | MB_OK);
+        return;
+    }
     
     // Set callbacks
     m_fileListView->setItemActivatedCallback([this](const FileExplorer::FileItem& item) {
@@ -596,6 +622,26 @@ void MainWindow::createFileListView() {
     
     // Set initial view mode
     m_fileListView->setViewMode(FileListView::ViewMode::Details);
+
+    // Position the list view initially
+    RECT rc;
+    GetClientRect(m_hwnd, &rc);
+    const int SIDE_BAR_WIDTH = 200;
+    const int TOOLBAR_HEIGHT = 40;
+    const int STATUS_BAR_HEIGHT = 22;
+    const int PADDING = 5;
+
+    SetWindowPos(m_fileListView->getHandle(), NULL,
+        SIDE_BAR_WIDTH + PADDING, TOOLBAR_HEIGHT + PADDING,
+        rc.right - SIDE_BAR_WIDTH - PADDING * 2,
+        rc.bottom - TOOLBAR_HEIGHT - STATUS_BAR_HEIGHT - PADDING * 2,
+        SWP_NOZORDER);
+
+    // Make sure it's visible
+    ShowWindow(m_fileListView->getHandle(), SW_SHOW);
+    UpdateWindow(m_fileListView->getHandle());
+
+    OutputDebugStringW(L"FileListView created\n");
 }
 
 void MainWindow::createStatusBar() {

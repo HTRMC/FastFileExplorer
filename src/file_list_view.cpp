@@ -5,6 +5,9 @@
 #include <unordered_map>
 #include <algorithm>
 
+// Control IDs
+constexpr int ID_FILE_LIST = 103;
+
 // Column indices
 enum {
     COLUMN_NAME = 0,
@@ -49,17 +52,23 @@ bool FileListView::create() {
         WC_LISTVIEWW,
         L"",
         WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_SHAREIMAGELISTS,
-        0, 0, 0, 0,  // Will be sized by parent
+        0, 0, 100, 100,  // Initial size (will be resized)
         m_parentHwnd,
-        NULL,
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(ID_FILE_LIST)),  // Using ID constant
         GetModuleHandle(NULL),
         NULL
     );
     
     if (!m_hwnd) {
+        DWORD error = GetLastError();
+        wchar_t buffer[256];
+        swprintf_s(buffer, L"Failed to create list view. Error code: %d\n", error);
+        OutputDebugStringW(buffer);
         return false;
     }
     
+    OutputDebugStringW(L"List view control created\n");
+
     // Set extended list view styles
     DWORD exStyle = LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_HEADERDRAGDROP;
     ListView_SetExtendedListViewStyle(m_hwnd, exStyle);
@@ -74,7 +83,12 @@ bool FileListView::create() {
     initializeColumns();
     
     // Set subclass procedure for custom handling
-    SetWindowSubclass(m_hwnd, FileListView::listViewProc, 0, reinterpret_cast<DWORD_PTR>(this));
+    if (!SetWindowSubclass(m_hwnd, FileListView::listViewProc, 0, reinterpret_cast<DWORD_PTR>(this))) {
+        OutputDebugStringW(L"Failed to set subclass procedure\n");
+    }
+
+    // Ensure visibility
+    ShowWindow(m_hwnd, SW_SHOW);
     
     return true;
 }
@@ -129,6 +143,8 @@ void FileListView::loadFiles(const std::vector<FileExplorer::FileItem>& files) {
     // Clear the list view
     ListView_DeleteAllItems(m_hwnd);
     
+    OutputDebugStringW((L"Loading " + std::to_wstring(files.size()) + L" files\n").c_str());
+
     // Add items to the list view
     for (size_t i = 0; i < files.size(); ++i) {
         const auto& file = files[i];
@@ -167,31 +183,73 @@ void FileListView::loadFiles(const std::vector<FileExplorer::FileItem>& files) {
         lvItem.iImage = iconIndex;
         lvItem.lParam = static_cast<LPARAM>(i);  // Store index for lookup
         
-        // Convert name to wide string - FIXED: ensure non-empty string
+        // Convert filename to wide string
+        std::wstring nameW;
         if (!file.name.empty()) {
-            std::wstring nameW = std::wstring(file.name.begin(), file.name.end());
+            size_t convertedChars = 0;
+            const size_t newsize = file.name.length() + 1;
+            wchar_t* wcstring = new wchar_t[newsize];
+            mbstowcs_s(&convertedChars, wcstring, newsize, file.name.c_str(), _TRUNCATE);
+            nameW = wcstring;
+            delete[] wcstring;
             lvItem.pszText = const_cast<LPWSTR>(nameW.c_str());
         } else {
-            // Handle empty string case
             lvItem.pszText = const_cast<LPWSTR>(L"");
         }
         
         int itemIndex = ListView_InsertItem(m_hwnd, &lvItem);
         
-        // Set subitems - FIXED: Ensure non-empty strings
+        if (itemIndex == -1) {
+            OutputDebugStringW(L"Failed to insert item\n");
+            continue;
+        }
         
-        // Size
-        std::wstring sizeW = sizeStr.empty() ? L"" : std::wstring(sizeStr.begin(), sizeStr.end());
+        // Set subitems
+        // Convert size to wide string
+        std::wstring sizeW;
+        if (!sizeStr.empty()) {
+            size_t convertedChars = 0;
+            const size_t newsize = sizeStr.length() + 1;
+            wchar_t* wcstring = new wchar_t[newsize];
+            mbstowcs_s(&convertedChars, wcstring, newsize, sizeStr.c_str(), _TRUNCATE);
+            sizeW = wcstring;
+            delete[] wcstring;
+        } else {
+            sizeW = L"";
+        }
         ListView_SetItemText(m_hwnd, itemIndex, COLUMN_SIZE, const_cast<LPWSTR>(sizeW.c_str()));
 
-        // Type
-        std::wstring typeW = typeStr.empty() ? L"" : std::wstring(typeStr.begin(), typeStr.end());
+        // Convert type to wide string
+        std::wstring typeW;
+        if (!typeStr.empty()) {
+            size_t convertedChars = 0;
+            const size_t newsize = typeStr.length() + 1;
+            wchar_t* wcstring = new wchar_t[newsize];
+            mbstowcs_s(&convertedChars, wcstring, newsize, typeStr.c_str(), _TRUNCATE);
+            typeW = wcstring;
+            delete[] wcstring;
+        } else {
+            typeW = L"";
+        }
         ListView_SetItemText(m_hwnd, itemIndex, COLUMN_TYPE, const_cast<LPWSTR>(typeW.c_str()));
 
-        // Date
-        std::wstring dateW = dateStr.empty() ? L"" : std::wstring(dateStr.begin(), dateStr.end());
+        // Convert date to wide string
+        std::wstring dateW;
+        if (!dateStr.empty()) {
+            size_t convertedChars = 0;
+            const size_t newsize = dateStr.length() + 1;
+            wchar_t* wcstring = new wchar_t[newsize];
+            mbstowcs_s(&convertedChars, wcstring, newsize, dateStr.c_str(), _TRUNCATE);
+            dateW = wcstring;
+            delete[] wcstring;
+        } else {
+            dateW = L"";
+        }
         ListView_SetItemText(m_hwnd, itemIndex, COLUMN_DATE, const_cast<LPWSTR>(dateW.c_str()));
     }
+
+    // Force redraw
+    InvalidateRect(m_hwnd, NULL, TRUE);
 }
 
 void FileListView::clear() {
@@ -350,28 +408,38 @@ void FileListView::initializeColumns() {
     lvc.pszText = const_cast<LPWSTR>(L"Name");
     lvc.cx = COLUMN_WIDTH_NAME;
     lvc.fmt = LVCFMT_LEFT;
-    ListView_InsertColumn(m_hwnd, COLUMN_NAME, &lvc);
+    if (ListView_InsertColumn(m_hwnd, COLUMN_NAME, &lvc) == -1) {
+        OutputDebugStringW(L"Failed to insert Name column\n");
+    }
     
     // Size column
     lvc.iSubItem = COLUMN_SIZE;
     lvc.pszText = const_cast<LPWSTR>(L"Size");
     lvc.cx = COLUMN_WIDTH_SIZE;
     lvc.fmt = LVCFMT_RIGHT;
-    ListView_InsertColumn(m_hwnd, COLUMN_SIZE, &lvc);
+    if (ListView_InsertColumn(m_hwnd, COLUMN_SIZE, &lvc) == -1) {
+        OutputDebugStringW(L"Failed to insert Size column\n");
+    }
     
     // Type column
     lvc.iSubItem = COLUMN_TYPE;
     lvc.pszText = const_cast<LPWSTR>(L"Type");
     lvc.cx = COLUMN_WIDTH_TYPE;
     lvc.fmt = LVCFMT_LEFT;
-    ListView_InsertColumn(m_hwnd, COLUMN_TYPE, &lvc);
+    if (ListView_InsertColumn(m_hwnd, COLUMN_TYPE, &lvc) == -1) {
+        OutputDebugStringW(L"Failed to insert Type column\n");
+    }
     
     // Date column
     lvc.iSubItem = COLUMN_DATE;
     lvc.pszText = const_cast<LPWSTR>(L"Date modified");
     lvc.cx = COLUMN_WIDTH_DATE;
     lvc.fmt = LVCFMT_LEFT;
-    ListView_InsertColumn(m_hwnd, COLUMN_DATE, &lvc);
+    if (ListView_InsertColumn(m_hwnd, COLUMN_DATE, &lvc) == -1) {
+        OutputDebugStringW(L"Failed to insert Date column\n");
+    }
+
+    OutputDebugStringW(L"Columns initialized\n");
 }
 
 void FileListView::updateImageList() {

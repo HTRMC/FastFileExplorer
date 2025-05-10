@@ -6,34 +6,39 @@
 #include <shlobj_core.h>
 
 FileExplorer::FileExplorer() : m_currentPath(fs::current_path()) {
+    // Create directory watcher
     m_dirWatcher = std::make_unique<DirectoryWatcher>();
     m_dirWatcher->setChangedCallback([this]() { onDirectoryChanged(); });
     
+    // Add debug output
+    OutputDebugStringW((L"Current path: " + m_currentPath.wstring() + L"\n").c_str());
+
     // Initialize quick access locations
     WCHAR path[MAX_PATH];
     
     // Documents
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PERSONAL, NULL, 0, path))) {
         m_quickAccessLocations.push_back(path);
+        OutputDebugStringW((L"Added quick access: " + std::wstring(path) + L"\n").c_str());
     }
     
     // Desktop
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_DESKTOP, NULL, 0, path))) {
         m_quickAccessLocations.push_back(path);
+        OutputDebugStringW((L"Added quick access: " + std::wstring(path) + L"\n").c_str());
     }
     
     // Downloads
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, path))) {
         m_quickAccessLocations.push_back(std::wstring(path) + L"\\Downloads");
+        OutputDebugStringW((L"Added quick access: " + std::wstring(path) + L"\\Downloads\n").c_str());
     }
     
     // Pictures
     if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_MYPICTURES, NULL, 0, path))) {
         m_quickAccessLocations.push_back(path);
+        OutputDebugStringW((L"Added quick access: " + std::wstring(path) + L"\n").c_str());
     }
-    
-    // Load files initially
-    navigateTo(m_currentPath);
 }
 
 FileExplorer::~FileExplorer() {
@@ -46,11 +51,22 @@ FileExplorer::~FileExplorer() {
 
 void FileExplorer::navigateTo(const fs::path& path) {
     try {
+        OutputDebugStringW((L"Navigating to: " + path.wstring() + L"\n").c_str());
+
         // Check if path exists and is a directory
-        if (!fs::exists(path) || !fs::is_directory(path)) {
+        if (!fs::exists(path)) {
             if (m_onError) {
-                m_onError(std::format("Path '{}' is not a valid directory", path.string()));
+                m_onError(std::format("Path '{}' does not exist", path.string()));
             }
+            OutputDebugStringW(L"Path does not exist\n");
+            return;
+        }
+
+        if (!fs::is_directory(path)) {
+            if (m_onError) {
+                m_onError(std::format("Path '{}' is not a directory", path.string()));
+            }
+            OutputDebugStringW(L"Path is not a directory\n");
             return;
         }
         
@@ -59,9 +75,13 @@ void FileExplorer::navigateTo(const fs::path& path) {
         
         // Update current path
         m_currentPath = fs::canonical(path);
-        
+        OutputDebugStringW((L"Canonical path: " + m_currentPath.wstring() + L"\n").c_str());
+
         // Start watching the new directory
-        m_dirWatcher->startWatching(m_currentPath);
+        if (!m_dirWatcher->startWatching(m_currentPath)) {
+            OutputDebugStringW(L"Failed to start directory watcher\n");
+            // Continue anyway, not critical
+        }
         
         // Load files
         loadFiles();
@@ -70,6 +90,13 @@ void FileExplorer::navigateTo(const fs::path& path) {
         if (m_onError) {
             m_onError(std::format("Error navigating to path: {}", e.what()));
         }
+        OutputDebugStringW(L"Filesystem error\n");
+    }
+    catch (const std::exception& e) {
+        if (m_onError) {
+            m_onError(std::format("Error: {}", e.what()));
+        }
+        OutputDebugStringW(L"Standard exception\n");
     }
 }
 
@@ -206,6 +233,8 @@ void FileExplorer::removeQuickAccessLocation(const fs::path& path) {
 }
 
 void FileExplorer::loadFiles() {
+    OutputDebugStringW(L"Loading files...\n");
+
     // Cancel any ongoing loading operation
     if (m_loadingThread.joinable()) {
         m_isLoading = false;
@@ -278,8 +307,13 @@ void FileExplorer::loadFiles() {
                 } while (FindNextFileW(hFind, &findData) != 0 && m_isLoading);
                 
                 FindClose(hFind);
+            } else {
+                DWORD error = GetLastError();
+                OutputDebugStringW((L"FindFirstFile failed with error " + std::to_wstring(error) + L"\n").c_str());
             }
-            
+
+            OutputDebugStringW((L"Found " + std::to_wstring(newFiles.size()) + L" files\n").c_str());
+
             // Sort files (directories first, then by name)
             std::sort(newFiles.begin(), newFiles.end(), [](const FileItem& a, const FileItem& b) {
                 bool aIsDir = fs::is_directory(a.path);
@@ -298,10 +332,14 @@ void FileExplorer::loadFiles() {
             }
             
             if (m_onFilesLoaded && m_isLoading) {
+                OutputDebugStringW(L"Calling onFilesLoaded callback\n");
                 m_onFilesLoaded(m_files);
+            } else {
+                OutputDebugStringW(L"No onFilesLoaded callback or loading canceled\n");
             }
         }
         catch (const std::exception& e) {
+            OutputDebugStringA(("Error loading files: " + std::string(e.what()) + "\n").c_str());
             if (m_onError && m_isLoading) {
                 m_onError(std::format("Error loading files: {}", e.what()));
             }
