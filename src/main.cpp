@@ -64,7 +64,8 @@ void UpdateNavigationButtons();
 void ApplyFontToAllControls();
 
 // Main entry point
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
+{
     // Initialize common controls
     INITCOMMONCONTROLSEX icc = {};
     icc.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -83,7 +84,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     wcex.lpszClassName = WINDOW_CLASS_NAME;
     wcex.hIconSm = LoadIcon(NULL, IDI_APPLICATION);
 
-    if (!RegisterClassExW(&wcex)) {
+    if (!RegisterClassExW(&wcex))
+    {
         MessageBoxW(NULL, L"Failed to register window class!", L"Error", MB_ICONERROR);
         return 1;
     }
@@ -98,14 +100,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         NULL, NULL, hInstance, NULL
     );
 
-    if (!g_hwndMain) {
+    if (!g_hwndMain)
+    {
         MessageBoxW(NULL, L"Failed to create main window!", L"Error", MB_ICONERROR);
         return 1;
     }
 
     // Create Segoe UI font
     g_hFont = CreateSegoeUIFont(16);
-    if (!g_hFont) {
+    if (!g_hFont)
+    {
         MessageBoxW(NULL, L"Failed to create Segoe UI font!", L"Warning", MB_ICONWARNING);
     }
 
@@ -113,7 +117,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_hwndBackButton = CreateWindowExW(
         0,
         L"BUTTON",
-        L"←",  // Left arrow for back
+        L"←", // Left arrow for back
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         10, 10, 30, 25,
         g_hwndMain,
@@ -126,7 +130,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_hwndForwardButton = CreateWindowExW(
         0,
         L"BUTTON",
-        L"→",  // Right arrow for forward
+        L"→", // Right arrow for forward
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         45, 10, 30, 25,
         g_hwndMain,
@@ -168,7 +172,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     ApplyFontToAllControls();
 
     // Create list view
-    if (!CreateListView(g_hwndMain)) {
+    if (!CreateListView(g_hwndMain))
+    {
         MessageBoxW(NULL, L"Failed to create list view!", L"Error", MB_ICONERROR);
         return 1;
     }
@@ -183,13 +188,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 
     // Main message loop
     MSG msg = {};
-    while (GetMessage(&msg, NULL, 0, 0)) {
+    while (GetMessage(&msg, NULL, 0, 0))
+    {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
     // Clean up
-    if (g_hFont) {
+    if (g_hFont)
+    {
         DeleteObject(g_hFont);
     }
 
@@ -197,28 +204,31 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
 }
 
 // Create Segoe UI font with specified size
-HFONT CreateSegoeUIFont(int size, bool bold) {
+HFONT CreateSegoeUIFont(int size, bool bold)
+{
     return CreateFontW(
-        size,                       // Height
-        0,                          // Width
-        0,                          // Escapement
-        0,                          // Orientation
+        size, // Height
+        0, // Width
+        0, // Escapement
+        0, // Orientation
         bold ? FW_BOLD : FW_NORMAL, // Weight
-        FALSE,                      // Italic
-        FALSE,                      // Underline
-        FALSE,                      // StrikeOut
-        DEFAULT_CHARSET,            // CharSet
-        OUT_DEFAULT_PRECIS,         // OutPrecision
-        CLIP_DEFAULT_PRECIS,        // ClipPrecision
-        CLEARTYPE_QUALITY,          // Quality (using ClearType for better appearance)
-        DEFAULT_PITCH | FF_DONTCARE,// Pitch And Family
-        L"Segoe UI"                 // Font Name
+        FALSE, // Italic
+        FALSE, // Underline
+        FALSE, // StrikeOut
+        DEFAULT_CHARSET, // CharSet
+        OUT_DEFAULT_PRECIS, // OutPrecision
+        CLIP_DEFAULT_PRECIS, // ClipPrecision
+        CLEARTYPE_QUALITY, // Quality (using ClearType for better appearance)
+        DEFAULT_PITCH | FF_DONTCARE, // Pitch And Family
+        L"Segoe UI" // Font Name
     );
 }
 
 // Apply Segoe UI font to all controls
-void ApplyFontToAllControls() {
-    if (g_hFont) {
+void ApplyFontToAllControls()
+{
+    if (g_hFont)
+    {
         // Apply font to all controls
         SendMessageW(g_hwndMain, WM_SETFONT, (WPARAM)g_hFont, TRUE);
         SendMessageW(g_hwndBackButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
@@ -230,16 +240,22 @@ void ApplyFontToAllControls() {
 }
 
 // Custom window procedure for address bar to handle Enter key
-LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN) {
+LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    if (uMsg == WM_KEYDOWN && wParam == VK_RETURN)
+    {
         // Handle Enter key
         wchar_t path[MAX_PATH] = {};
         GetWindowTextW(hwnd, path, MAX_PATH);
-        if (path[0] != '\0') {
+        if (path[0] != '\0')
+        {
             // Check if user typed "This PC" (case-insensitive)
-            if (_wcsicmp(path, THIS_PC_NAME) == 0) {
-                NavigateTo(L"");  // Empty path means "This PC" in our app
-            } else {
+            if (_wcsicmp(path, THIS_PC_NAME) == 0)
+            {
+                NavigateTo(L""); // Empty path means "This PC" in our app
+            }
+            else
+            {
                 NavigateTo(path);
             }
         }
@@ -251,12 +267,14 @@ LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
 }
 
 // Window procedure
-LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
-    switch (uMsg) {
-        case WM_CREATE:
-            return 0;
+LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+    case WM_CREATE:
+        return 0;
 
-        case WM_SIZE:
+    case WM_SIZE:
         {
             int width = LOWORD(lParam);
             int height = HIWORD(lParam);
@@ -272,28 +290,35 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
 
-        case WM_COMMAND:
+    case WM_COMMAND:
         {
             int ctrlId = LOWORD(wParam);
             int notifyCode = HIWORD(wParam);
 
-            if (ctrlId == ID_BACK_BUTTON) {
+            if (ctrlId == ID_BACK_BUTTON)
+            {
                 NavigateBack();
                 return 0;
             }
-            else if (ctrlId == ID_FORWARD_BUTTON) {
+            else if (ctrlId == ID_FORWARD_BUTTON)
+            {
                 NavigateForward();
                 return 0;
             }
-            else if (ctrlId == ID_GO_BUTTON) {
+            else if (ctrlId == ID_GO_BUTTON)
+            {
                 // Get path from address bar and navigate to it
                 wchar_t path[MAX_PATH] = {};
                 GetWindowTextW(g_hwndAddressBar, path, MAX_PATH);
-                if (path[0] != '\0') {
+                if (path[0] != '\0')
+                {
                     // Check if user typed "This PC" (case-insensitive)
-                    if (_wcsicmp(path, THIS_PC_NAME) == 0) {
-                        NavigateTo(L"");  // Empty path means "This PC" in our app
-                    } else {
+                    if (_wcsicmp(path, THIS_PC_NAME) == 0)
+                    {
+                        NavigateTo(L""); // Empty path means "This PC" in our app
+                    }
+                    else
+                    {
                         NavigateTo(path);
                     }
                 }
@@ -302,18 +327,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
         }
 
-        case WM_NOTIFY:
+    case WM_NOTIFY:
         {
             NMHDR* nmhdr = (NMHDR*)lParam;
 
-            if (nmhdr->hwndFrom == g_hwndListView) {
-                switch (nmhdr->code) {
-                    case NM_DBLCLK:
+            if (nmhdr->hwndFrom == g_hwndListView)
+            {
+                switch (nmhdr->code)
+                {
+                case NM_DBLCLK:
                     {
                         NMITEMACTIVATE* nmia = (NMITEMACTIVATE*)lParam;
                         int itemIndex = nmia->iItem;
 
-                        if (itemIndex >= 0) {
+                        if (itemIndex >= 0)
+                        {
                             LVITEMW lvItem = {};
                             wchar_t buffer[MAX_PATH] = {};
 
@@ -326,9 +354,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                             ListView_GetItem(g_hwndListView, &lvItem);
 
                             fs::path* itemPath = (fs::path*)lvItem.lParam;
-                            if (itemPath) {
-                                NavigateTo(*itemPath);
-                                delete itemPath; // Free the allocated path
+                            if (itemPath)
+                            {
+                                // Create a copy of the path to use in NavigateTo
+                                fs::path pathCopy = *itemPath;
+                                NavigateTo(pathCopy);
                             }
                         }
                         return 0;
@@ -338,16 +368,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             break;
         }
 
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
     }
 
     return DefWindowProcW(hwnd, uMsg, wParam, lParam);
 }
 
 // Create the list view control
-bool CreateListView(HWND hwndParent) {
+bool CreateListView(HWND hwndParent)
+{
     // Create list view control
     g_hwndListView = CreateWindowExW(
         WS_EX_CLIENTEDGE,
@@ -361,7 +392,8 @@ bool CreateListView(HWND hwndParent) {
         NULL
     );
 
-    if (!g_hwndListView) {
+    if (!g_hwndListView)
+    {
         return false;
     }
 
@@ -398,7 +430,8 @@ bool CreateListView(HWND hwndParent) {
     ListView_SetImageList(g_hwndListView, hImageList, LVSIL_SMALL);
 
     // Apply font to list view
-    if (g_hFont) {
+    if (g_hFont)
+    {
         SendMessageW(g_hwndListView, WM_SETFONT, (WPARAM)g_hFont, TRUE);
     }
 
@@ -406,27 +439,33 @@ bool CreateListView(HWND hwndParent) {
 }
 
 // Populate the list view with files and folders
-void PopulateListView(const fs::path& path) {
+void PopulateListView(const fs::path& path)
+{
     // Clear list view and free previous items
     int itemCount = ListView_GetItemCount(g_hwndListView);
-    for (int i = 0; i < itemCount; i++) {
+    for (int i = 0; i < itemCount; i++)
+    {
         LVITEMW lvItem = {};
         lvItem.mask = LVIF_PARAM;
         lvItem.iItem = i;
 
-        if (ListView_GetItem(g_hwndListView, &lvItem) && lvItem.lParam) {
+        if (ListView_GetItem(g_hwndListView, &lvItem) && lvItem.lParam)
+        {
             delete reinterpret_cast<fs::path*>(lvItem.lParam);
         }
     }
     ListView_DeleteAllItems(g_hwndListView);
 
-    try {
-        if (path.empty()) {
+    try
+    {
+        if (path.empty())
+        {
             // Special case: show drives
             auto drives = EnumerateDrives();
             int index = 0;
 
-            for (const auto& drive : drives) {
+            for (const auto& drive : drives)
+            {
                 LVITEMW lvItem = {};
                 lvItem.mask = LVIF_TEXT | LVIF_PARAM | LVIF_IMAGE;
                 lvItem.iItem = index++;
@@ -463,7 +502,8 @@ void PopulateListView(const fs::path& path) {
             std::wstring windowTitle = L"Fast File Explorer - This PC";
             SetWindowTextW(g_hwndMain, windowTitle.c_str());
         }
-        else {
+        else
+        {
             // Update address bar
             SetWindowTextW(g_hwndAddressBar, path.wstring().c_str());
 
@@ -474,8 +514,10 @@ void PopulateListView(const fs::path& path) {
             // Actual directory contents
             int index = 0;
 
-            try {
-                for (const auto& entry : fs::directory_iterator(path)) {
+            try
+            {
+                for (const auto& entry : fs::directory_iterator(path))
+                {
                     LVITEMW lvItem = {};
                     lvItem.mask = LVIF_TEXT | LVIF_PARAM | LVIF_IMAGE;
                     lvItem.iItem = index++;
@@ -499,21 +541,25 @@ void PopulateListView(const fs::path& path) {
                     int itemIndex = ListView_InsertItem(g_hwndListView, &lvItem);
 
                     // Set type
-                    if (fs::is_directory(entry.path())) {
+                    if (fs::is_directory(entry.path()))
+                    {
                         ListView_SetItemText(g_hwndListView, itemIndex, 1, const_cast<LPWSTR>(L"Folder"));
                         ListView_SetItemText(g_hwndListView, itemIndex, 2, const_cast<LPWSTR>(L""));
                     }
-                    else {
+                    else
+                    {
                         // Get file type
                         std::wstring typeDesc = GetFileTypeDescription(entry.path());
                         ListView_SetItemText(g_hwndListView, itemIndex, 1, const_cast<LPWSTR>(typeDesc.c_str()));
 
                         // Get file size
                         uintmax_t size = 0;
-                        try {
+                        try
+                        {
                             size = fs::file_size(entry.path());
                         }
-                        catch (...) {
+                        catch (...)
+                        {
                             // Ignore errors
                         }
 
@@ -522,12 +568,14 @@ void PopulateListView(const fs::path& path) {
                     }
                 }
             }
-            catch (const fs::filesystem_error& e) {
+            catch (const fs::filesystem_error& e)
+            {
                 MessageBoxA(g_hwndMain, e.what(), "Directory Error", MB_ICONERROR);
             }
         }
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         MessageBoxA(g_hwndMain, e.what(), "Error", MB_ICONERROR);
     }
 
@@ -536,33 +584,41 @@ void PopulateListView(const fs::path& path) {
 }
 
 // Navigate to a path
-void NavigateTo(const fs::path& path, bool addToHistory) {
-    try {
+void NavigateTo(const fs::path& path, bool addToHistory)
+{
+    try
+    {
         fs::path newPath;
 
-        if (path.empty()) {
+        if (path.empty())
+        {
             // Special case for drives
             newPath = L"";
         }
-        else if (fs::is_directory(path)) {
+        else if (fs::is_directory(path))
+        {
             newPath = path;
         }
-        else if (fs::exists(path)) {
+        else if (fs::exists(path))
+        {
             // If it's a file, open it
             ShellExecuteW(g_hwndMain, L"open", path.wstring().c_str(), NULL, NULL, SW_SHOW);
             return;
         }
-        else {
+        else
+        {
             MessageBoxW(g_hwndMain, L"The specified path does not exist.", L"Error", MB_ICONERROR);
             return;
         }
 
         // Add current path to back history if it's a new navigation
-        if (addToHistory && !g_navigatingHistory && !g_currentPath.empty()) {
+        if (addToHistory && !g_navigatingHistory && !g_currentPath.empty())
+        {
             g_backHistory.push_front(g_currentPath);
 
             // Clear forward history when navigating to a new path
-            while (!g_forwardHistory.empty()) {
+            while (!g_forwardHistory.empty())
+            {
                 g_forwardHistory.pop_front();
             }
         }
@@ -571,14 +627,17 @@ void NavigateTo(const fs::path& path, bool addToHistory) {
         g_currentPath = newPath;
         PopulateListView(g_currentPath);
     }
-    catch (const std::exception& e) {
+    catch (const std::exception& e)
+    {
         MessageBoxA(g_hwndMain, e.what(), "Error", MB_ICONERROR);
     }
 }
 
 // Navigate back
-void NavigateBack() {
-    if (!g_backHistory.empty()) {
+void NavigateBack()
+{
+    if (!g_backHistory.empty())
+    {
         // Add current location to forward history
         g_forwardHistory.push_front(g_currentPath);
 
@@ -594,8 +653,10 @@ void NavigateBack() {
 }
 
 // Navigate forward
-void NavigateForward() {
-    if (!g_forwardHistory.empty()) {
+void NavigateForward()
+{
+    if (!g_forwardHistory.empty())
+    {
         // Add current location to back history
         g_backHistory.push_front(g_currentPath);
 
@@ -611,22 +672,27 @@ void NavigateForward() {
 }
 
 // Update the state of navigation buttons
-void UpdateNavigationButtons() {
+void UpdateNavigationButtons()
+{
     EnableWindow(g_hwndBackButton, !g_backHistory.empty());
     EnableWindow(g_hwndForwardButton, !g_forwardHistory.empty());
 }
 
 // Get a list of available drives
-std::vector<fs::path> EnumerateDrives() {
+std::vector<fs::path> EnumerateDrives()
+{
     std::vector<fs::path> drives;
 
     DWORD driveMask = ::GetLogicalDrives();
-    if (driveMask == 0) {
+    if (driveMask == 0)
+    {
         return drives;
     }
 
-    for (char drive = 'A'; drive <= 'Z'; drive++) {
-        if ((driveMask & 1) == 1) {
+    for (char drive = 'A'; drive <= 'Z'; drive++)
+    {
+        if ((driveMask & 1) == 1)
+        {
             std::wstring drivePath = std::format(L"{}:\\", drive);
             drives.push_back(drivePath);
         }
@@ -637,9 +703,11 @@ std::vector<fs::path> EnumerateDrives() {
 }
 
 // Get file type description
-std::wstring GetFileTypeDescription(const fs::path& path) {
+std::wstring GetFileTypeDescription(const fs::path& path)
+{
     SHFILEINFOW sfi = {};
-    if (SHGetFileInfoW(path.wstring().c_str(), 0, &sfi, sizeof(sfi), SHGFI_TYPENAME)) {
+    if (SHGetFileInfoW(path.wstring().c_str(), 0, &sfi, sizeof(sfi), SHGFI_TYPENAME))
+    {
         return sfi.szTypeName;
     }
 
@@ -647,27 +715,33 @@ std::wstring GetFileTypeDescription(const fs::path& path) {
 }
 
 // Format file size
-std::wstring FormatFileSize(uintmax_t size) {
-    constexpr const wchar_t* SUFFIXES[] = { L"B", L"KB", L"MB", L"GB", L"TB" };
+std::wstring FormatFileSize(uintmax_t size)
+{
+    constexpr const wchar_t* SUFFIXES[] = {L"B", L"KB", L"MB", L"GB", L"TB"};
 
     double dblSize = static_cast<double>(size);
     int suffixIndex = 0;
 
-    while (dblSize >= 1024.0 && suffixIndex < 4) {
+    while (dblSize >= 1024.0 && suffixIndex < 4)
+    {
         dblSize /= 1024.0;
         suffixIndex++;
     }
 
-    if (suffixIndex == 0) {
+    if (suffixIndex == 0)
+    {
         return std::format(L"{} {}", size, SUFFIXES[suffixIndex]);
     }
-    else if (dblSize < 10) {
+    else if (dblSize < 10)
+    {
         return std::format(L"{:.2f} {}", dblSize, SUFFIXES[suffixIndex]);
     }
-    else if (dblSize < 100) {
+    else if (dblSize < 100)
+    {
         return std::format(L"{:.1f} {}", dblSize, SUFFIXES[suffixIndex]);
     }
-    else {
+    else
+    {
         return std::format(L"{:.0f} {}", dblSize, SUFFIXES[suffixIndex]);
     }
 }
