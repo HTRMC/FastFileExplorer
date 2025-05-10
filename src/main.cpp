@@ -15,7 +15,8 @@
 
 namespace fs = std::filesystem;
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
+// Windows entry point for GUI applications
+int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
     try {
         // Initialize common controls
         INITCOMMONCONTROLSEX icex;
