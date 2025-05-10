@@ -875,77 +875,39 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (!g_hFont)
     {
         MessageBoxW(NULL, L"Failed to create Segoe UI font!", L"Warning", MB_ICONWARNING);
-    }
-
-    // Initialize back and forward icons
-    g_hBackIcon = NULL;
-    g_hForwardIcon = NULL;
-
-    // Load standard system arrow icons - direct approach
-    HMODULE hShell32 = LoadLibraryW(L"shell32.dll");
+    }    // Initialize back and forward icons using a specific icon from shell32.dll
+    HINSTANCE hShell32 = LoadLibraryW(L"shell32.dll");
     if (hShell32)
     {
-        // Try several common icon indices
-        const int backIconIds[] = {3, 77, 132, 134, 136, 308};
-        const int forwardIconIds[] = {4, 78, 133, 135, 137, 309};
-
-        // Try each icon index until we find ones that work
-        for (int i = 0; i < _countof(backIconIds); i++)
-        {
-            if (!g_hBackIcon)
-            {
-                g_hBackIcon = (HICON)LoadImageW(
-                    hShell32,
-                    MAKEINTRESOURCEW(backIconIds[i]),
-                    IMAGE_ICON,
-                    ICON_SIZE, ICON_SIZE,
-                    LR_DEFAULTCOLOR
-                );
-            }
-
-            if (!g_hForwardIcon)
-            {
-                g_hForwardIcon = (HICON)LoadImageW(
-                    hShell32,
-                    MAKEINTRESOURCEW(forwardIconIds[i]),
-                    IMAGE_ICON,
-                    ICON_SIZE, ICON_SIZE,
-                    LR_DEFAULTCOLOR
-                );
-            }
-
-            // Break if we loaded both icons
-            if (g_hBackIcon && g_hForwardIcon)
-            {
-                break;
-            }
-        }
-
+        // Calculate icon indices based on the offset from user's system (191) to reference system (305)
+        // Use one icon index for back button and one for forward button
+        int iconOffset = 305 - 191; // The difference between reference and user's system
+        int backIconIndex = 135 - iconOffset; // For left arrow
+        int forwardIconIndex = 136 - iconOffset; // For right arrow
+        
+        g_hBackIcon = (HICON)LoadImageW(hShell32, MAKEINTRESOURCEW(backIconIndex), IMAGE_ICON, ICON_SIZE, ICON_SIZE, 0);
+        g_hForwardIcon = (HICON)LoadImageW(hShell32, MAKEINTRESOURCEW(forwardIconIndex), IMAGE_ICON, ICON_SIZE, ICON_SIZE, 0);
         FreeLibrary(hShell32);
     }
-
-    // Fallback to system arrows if necessary
-    if (!g_hBackIcon)
-        g_hBackIcon = LoadIcon(NULL, IDI_APPLICATION);
-    if (!g_hForwardIcon)
-        g_hForwardIcon = LoadIcon(NULL, IDI_APPLICATION);
-
-    // Create STANDARD buttons (not custom) which better handle icons
+    else
+    {
+        // Fall back to text arrows if we can't load the icons
+        g_hBackIcon = NULL;
+        g_hForwardIcon = NULL;
+    }// Create STANDARD buttons with text arrows
     g_hwndBackButton = CreateWindowW(
-        L"BUTTON", L"",
-        WS_CHILD | WS_VISIBLE | BS_ICON,
+        L"BUTTON", L"←",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         UI_PADDING, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT,
         g_hwndMain, (HMENU)(INT_PTR)ID_BACK_BUTTON, hInstance, NULL
     );
 
     g_hwndForwardButton = CreateWindowW(
-        L"BUTTON", L"",
-        WS_CHILD | WS_VISIBLE | BS_ICON,
+        L"BUTTON", L"→",
+        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         UI_PADDING + BUTTON_WIDTH + 5, UI_PADDING, BUTTON_WIDTH, BUTTON_HEIGHT,
         g_hwndMain, (HMENU)(INT_PTR)ID_FORWARD_BUTTON, hInstance, NULL
-    );
-
-    // Set button icons using a more reliable method
+    );// Set button icons using a more reliable method
     if (g_hBackIcon)
     {
         SendMessageW(g_hwndBackButton, BM_SETIMAGE, IMAGE_ICON, (LPARAM)g_hBackIcon);
