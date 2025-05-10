@@ -27,6 +27,9 @@ constexpr int ID_FORWARD_BUTTON = 102;
 constexpr int ID_ADDRESS_BAR = 103;
 constexpr int ID_GO_BUTTON = 104;
 
+// Special paths
+constexpr wchar_t THIS_PC_NAME[] = L"This PC";
+
 // Global variables
 HWND g_hwndMain = NULL;
 HWND g_hwndListView = NULL;
@@ -34,6 +37,7 @@ HWND g_hwndAddressBar = NULL;
 HWND g_hwndBackButton = NULL;
 HWND g_hwndForwardButton = NULL;
 HWND g_hwndGoButton = NULL;
+HFONT g_hFont = NULL;
 fs::path g_currentPath;
 
 // Original window procedure for the address bar
@@ -47,6 +51,7 @@ bool g_navigatingHistory = false;
 // Forward declarations
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+HFONT CreateSegoeUIFont(int size, bool bold = false);
 bool CreateListView(HWND hwndParent);
 void PopulateListView(const fs::path& path);
 void NavigateTo(const fs::path& path, bool addToHistory = true);
@@ -56,6 +61,7 @@ std::vector<fs::path> EnumerateDrives();
 std::wstring GetFileTypeDescription(const fs::path& path);
 std::wstring FormatFileSize(uintmax_t size);
 void UpdateNavigationButtons();
+void ApplyFontToAllControls();
 
 // Main entry point
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow) {
@@ -86,7 +92,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     g_hwndMain = CreateWindowExW(
         WS_EX_OVERLAPPEDWINDOW,
         WINDOW_CLASS_NAME,
-        L"Simple File Explorer",
+        L"Fast File Explorer",
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
         NULL, NULL, hInstance, NULL
@@ -95,6 +101,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
     if (!g_hwndMain) {
         MessageBoxW(NULL, L"Failed to create main window!", L"Error", MB_ICONERROR);
         return 1;
+    }
+
+    // Create Segoe UI font
+    g_hFont = CreateSegoeUIFont(16);
+    if (!g_hFont) {
+        MessageBoxW(NULL, L"Failed to create Segoe UI font!", L"Warning", MB_ICONWARNING);
     }
 
     // Create Back button (left arrow)
@@ -152,17 +164,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         NULL
     );
 
-    // Set fonts for the buttons to ensure proper rendering
-    HFONT hFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                             DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-
-    if (hFont) {
-        SendMessageW(g_hwndBackButton, WM_SETFONT, (WPARAM)hFont, TRUE);
-        SendMessageW(g_hwndForwardButton, WM_SETFONT, (WPARAM)hFont, TRUE);
-        SendMessageW(g_hwndAddressBar, WM_SETFONT, (WPARAM)hFont, TRUE);
-        SendMessageW(g_hwndGoButton, WM_SETFONT, (WPARAM)hFont, TRUE);
-    }
+    // Apply Segoe UI font to all controls
+    ApplyFontToAllControls();
 
     // Create list view
     if (!CreateListView(g_hwndMain)) {
@@ -185,7 +188,45 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLi
         DispatchMessage(&msg);
     }
 
+    // Clean up
+    if (g_hFont) {
+        DeleteObject(g_hFont);
+    }
+
     return (int)msg.wParam;
+}
+
+// Create Segoe UI font with specified size
+HFONT CreateSegoeUIFont(int size, bool bold) {
+    return CreateFontW(
+        size,                       // Height
+        0,                          // Width
+        0,                          // Escapement
+        0,                          // Orientation
+        bold ? FW_BOLD : FW_NORMAL, // Weight
+        FALSE,                      // Italic
+        FALSE,                      // Underline
+        FALSE,                      // StrikeOut
+        DEFAULT_CHARSET,            // CharSet
+        OUT_DEFAULT_PRECIS,         // OutPrecision
+        CLIP_DEFAULT_PRECIS,        // ClipPrecision
+        CLEARTYPE_QUALITY,          // Quality (using ClearType for better appearance)
+        DEFAULT_PITCH | FF_DONTCARE,// Pitch And Family
+        L"Segoe UI"                 // Font Name
+    );
+}
+
+// Apply Segoe UI font to all controls
+void ApplyFontToAllControls() {
+    if (g_hFont) {
+        // Apply font to all controls
+        SendMessageW(g_hwndMain, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndBackButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndForwardButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndAddressBar, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndGoButton, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+        SendMessageW(g_hwndListView, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+    }
 }
 
 // Custom window procedure for address bar to handle Enter key
@@ -195,7 +236,12 @@ LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         wchar_t path[MAX_PATH] = {};
         GetWindowTextW(hwnd, path, MAX_PATH);
         if (path[0] != '\0') {
-            NavigateTo(path);
+            // Check if user typed "This PC" (case-insensitive)
+            if (_wcsicmp(path, THIS_PC_NAME) == 0) {
+                NavigateTo(L"");  // Empty path means "This PC" in our app
+            } else {
+                NavigateTo(path);
+            }
         }
         return 0;
     }
@@ -244,7 +290,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 wchar_t path[MAX_PATH] = {};
                 GetWindowTextW(g_hwndAddressBar, path, MAX_PATH);
                 if (path[0] != '\0') {
-                    NavigateTo(path);
+                    // Check if user typed "This PC" (case-insensitive)
+                    if (_wcsicmp(path, THIS_PC_NAME) == 0) {
+                        NavigateTo(L"");  // Empty path means "This PC" in our app
+                    } else {
+                        NavigateTo(path);
+                    }
                 }
                 return 0;
             }
@@ -346,6 +397,11 @@ bool CreateListView(HWND hwndParent) {
     HIMAGELIST hImageList = ImageList_Create(16, 16, ILC_COLOR32 | ILC_MASK, 32, 32);
     ListView_SetImageList(g_hwndListView, hImageList, LVSIL_SMALL);
 
+    // Apply font to list view
+    if (g_hFont) {
+        SendMessageW(g_hwndListView, WM_SETFONT, (WPARAM)g_hFont, TRUE);
+    }
+
     return true;
 }
 
@@ -401,17 +457,18 @@ void PopulateListView(const fs::path& path) {
             }
 
             // Update address bar
-            SetWindowTextW(g_hwndAddressBar, L"This PC");
+            SetWindowTextW(g_hwndAddressBar, THIS_PC_NAME);
 
             // Set window title
-            SetWindowTextW(g_hwndMain, L"Simple File Explorer - This PC");
+            std::wstring windowTitle = L"Fast File Explorer - This PC";
+            SetWindowTextW(g_hwndMain, windowTitle.c_str());
         }
         else {
             // Update address bar
             SetWindowTextW(g_hwndAddressBar, path.wstring().c_str());
 
             // Set window title
-            std::wstring windowTitle = L"Simple File Explorer - " + path.wstring();
+            std::wstring windowTitle = L"Fast File Explorer - " + path.wstring();
             SetWindowTextW(g_hwndMain, windowTitle.c_str());
 
             // Actual directory contents
